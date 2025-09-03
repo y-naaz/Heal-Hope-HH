@@ -1,5 +1,87 @@
 /* 🎨 Beautiful Crisis Chat Styles - Completely Redesigned */
 
+/* Modal Overlay for Crisis Chat */
+.chat-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(10px);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    animation: fadeIn 0.3s ease;
+}
+
+.chat-modal-container {
+    width: 100%;
+    max-width: 1000px;
+    height: 98vh;
+    max-height: 98vh;
+    border-radius: 24px;
+    overflow: hidden;
+    box-shadow: 
+        0 50px 100px rgba(0, 0, 0, 0.3),
+        0 25px 50px rgba(0, 0, 0, 0.2);
+    animation: slideInUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Chat Header with Status and Close Button */
+.chat-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    flex-shrink: 0;
+}
+
+.close-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 1.2rem;
+}
+
+.close-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.1);
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(100px) scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
 /* Modern chat container with stunning visuals */
 .crisis-chat-container {
     display: flex;
@@ -114,14 +196,14 @@
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 2rem;
+    padding: 0.75rem;
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
-    max-height: 60vh;
+    gap: 0.5rem;
+    min-height: 0;
     background: rgba(255, 255, 255, 0.98);
-    margin: 1.5rem;
-    border-radius: 24px;
+    margin: 0.5rem;
+    border-radius: 20px;
     backdrop-filter: blur(40px) saturate(200%);
     border: 1px solid rgba(255, 255, 255, 0.4);
     box-shadow: 
@@ -145,10 +227,10 @@
 /* Beautiful message bubbles */
 .chat-message {
     display: flex;
-    gap: 1rem;
+    gap: 0.75rem;
     align-items: flex-end;
-    max-width: 85%;
-    animation: messageAppear 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+    max-width: 90%;
+    animation: messageAppear 0.3s ease-out;
     opacity: 0;
     animation-fill-mode: forwards;
 }
@@ -173,20 +255,20 @@
 
 /* Gorgeous avatars */
 .message-avatar {
-    width: 48px;
-    height: 48px;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.4rem;
+    font-size: 1.1rem;
     flex-shrink: 0;
     box-shadow: 
-        0 12px 24px rgba(102, 126, 234, 0.4),
-        0 6px 12px rgba(0, 0, 0, 0.15);
-    border: 3px solid rgba(255, 255, 255, 0.4);
+        0 8px 16px rgba(102, 126, 234, 0.4),
+        0 4px 8px rgba(0, 0, 0, 0.15);
+    border: 2px solid rgba(255, 255, 255, 0.4);
     position: relative;
     overflow: hidden;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -225,17 +307,17 @@
 /* Stunning message content bubbles */
 .message-content {
     background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-    border-radius: 24px;
-    padding: 1.25rem 1.5rem;
+    border-radius: 16px;
+    padding: 0.75rem 1rem;
     box-shadow: 
-        0 15px 35px rgba(0, 0, 0, 0.1),
-        0 5px 15px rgba(0, 0, 0, 0.08),
+        0 8px 20px rgba(0, 0, 0, 0.08),
+        0 3px 8px rgba(0, 0, 0, 0.06),
         inset 0 1px 0 rgba(255, 255, 255, 0.8);
     max-width: 100%;
     word-wrap: break-word;
     position: relative;
     border: 1px solid rgba(255, 255, 255, 0.8);
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: all 0.2s ease;
 }
 
 .message-content:hover {
@@ -346,23 +428,28 @@
 
 /* Enhanced typography */
 .message-content p {
-    margin: 0;
-    line-height: 1.7;
-    font-size: 1rem;
-    font-weight: 400;
+    margin: 0 0 0.5rem 0;
+    line-height: 1.4;
+    font-size: 0.85rem;
+    font-weight: 500;
     color: #334155;
+}
+
+.message-content p:last-child {
+    margin-bottom: 0;
 }
 
 .chat-message.user .message-content p {
     color: rgba(255, 255, 255, 0.95);
+    font-size: 0.85rem;
 }
 
 .message-time {
-    font-size: 0.75rem;
+    font-size: 0.9rem;
     color: #64748b;
-    margin-top: 0.75rem;
+    margin-top: 1rem;
     display: block;
-    font-weight: 500;
+    font-weight: 600;
     opacity: 0.9;
     text-align: right;
 }
@@ -373,17 +460,18 @@
 
 /* Stunning input container */
 .chat-input-container {
-    padding: 2rem;
+    padding: 1rem;
     background: rgba(255, 255, 255, 0.98);
     backdrop-filter: blur(40px) saturate(200%);
     border-top: 1px solid rgba(255, 255, 255, 0.4);
-    margin: 0 1.5rem 1.5rem 1.5rem;
-    border-radius: 24px;
+    margin: 0 0.5rem 0.5rem 0.5rem;
+    border-radius: 20px;
     box-shadow: 
         0 -8px 32px rgba(0, 0, 0, 0.1),
         0 -4px 16px rgba(0, 0, 0, 0.05),
         inset 0 1px 0 rgba(255, 255, 255, 0.8);
     position: relative;
+    flex-shrink: 0;
 }
 
 .chat-input-container::before {
@@ -440,20 +528,20 @@
 
 #chatInput {
     flex: 1;
-    padding: 1rem 1.5rem;
+    padding: 1rem 1.25rem;
     border: none;
     border-radius: 25px;
-    font-size: 1rem;
+    font-size: 0.95rem;
     outline: none;
     background: transparent;
     color: #334155;
-    font-weight: 400;
+    font-weight: 500;
     line-height: 1.5;
 }
 
 #chatInput::placeholder {
     color: #94a3b8;
-    font-weight: 400;
+    font-weight: 500;
 }
 
 #chatInput:disabled {
@@ -464,8 +552,8 @@
 
 /* Spectacular send button */
 #sendBtn {
-    width: 56px;
-    height: 56px;
+    width: 48px;
+    height: 48px;
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -474,12 +562,12 @@
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     border: none;
     color: white;
-    font-size: 1.25rem;
+    font-size: 1.1rem;
     cursor: pointer;
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     box-shadow: 
-        0 12px 24px rgba(102, 126, 234, 0.4),
-        0 6px 12px rgba(0, 0, 0, 0.1);
+        0 8px 16px rgba(102, 126, 234, 0.4),
+        0 4px 8px rgba(0, 0, 0, 0.1);
     position: relative;
     overflow: hidden;
 }
@@ -820,57 +908,108 @@
 
 /* Enhanced mobile responsiveness */
 @media (max-width: 768px) {
+    .chat-modal-container {
+        height: 100vh;
+        max-height: 100vh;
+        border-radius: 0;
+        max-width: 100%;
+    }
+    
     .crisis-chat-container {
         height: 100vh;
     }
     
+    .chat-header {
+        padding: 0.75rem 1rem;
+    }
+    
     .chat-messages {
-        margin: 1rem;
-        padding: 1.5rem;
-        max-height: calc(100vh - 200px);
+        margin: 0.25rem;
+        padding: 0.5rem;
+        border-radius: 16px;
     }
     
     .chat-input-container {
-        margin: 0 1rem 1rem 1rem;
-        padding: 1.5rem;
+        margin: 0 0.25rem 0.25rem 0.25rem;
+        padding: 0.75rem;
+        border-radius: 16px;
     }
     
     .chat-message {
         max-width: 95%;
+        gap: 0.5rem;
     }
     
     .message-avatar {
-        width: 40px;
-        height: 40px;
-        font-size: 1.2rem;
-    }
-    
-    .message-content {
-        padding: 1rem 1.25rem;
-        font-size: 0.95rem;
-    }
-    
-    .resource-grid {
-        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 1rem;
-    }
-    
-    .resource-card {
-        padding: 1.5rem 1rem;
-    }
-    
-    .resource-card i {
-        font-size: 2rem;
-    }
-    
-    .emergency-btn {
-        padding: 1rem 1.5rem;
+        width: 28px;
+        height: 28px;
         font-size: 0.9rem;
     }
     
-    .quick-btn {
-        padding: 0.75rem 1.25rem;
+    .message-content {
+        padding: 0.6rem 0.8rem;
+        font-size: 0.8rem;
+        border-radius: 12px;
+    }
+    
+    .message-content p {
+        font-size: 0.8rem;
+        line-height: 1.3;
+    }
+    
+    .resource-grid {
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 0.75rem;
+    }
+    
+    .resource-card {
+        padding: 1rem 0.75rem;
+    }
+    
+    .resource-card i {
+        font-size: 1.75rem;
+    }
+    
+    .emergency-btn {
+        padding: 0.875rem 1.25rem;
         font-size: 0.85rem;
+    }
+    
+    .quick-btn {
+        padding: 0.6rem 1rem;
+        font-size: 0.8rem;
+    }
+}
+
+/* Portrait orientation optimization */
+@media (orientation: portrait) and (max-height: 800px) {
+    .chat-modal-container {
+        height: 100vh;
+        max-height: 100vh;
+    }
+    
+    .chat-header {
+        padding: 0.75rem 1rem;
+    }
+    
+    .chat-messages {
+        margin: 0.25rem;
+        padding: 0.5rem;
+        gap: 0.4rem;
+    }
+    
+    .chat-input-container {
+        padding: 0.75rem;
+        margin: 0 0.25rem 0.25rem 0.25rem;
+    }
+    
+    .message-content {
+        padding: 0.6rem 0.8rem;
+    }
+    
+    .message-content p {
+        margin-bottom: 0.3rem;
+        line-height: 1.3;
     }
 }
 

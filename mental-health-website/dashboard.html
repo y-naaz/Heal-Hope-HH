@@ -7,8 +7,8 @@
     <link rel="stylesheet" href="styles/main.css">
     <link rel="stylesheet" href="styles/dashboard.css">
     <link rel="stylesheet" href="styles/chat.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="dashboard-body">
@@ -16,8 +16,10 @@
     <aside class="sidebar">
         <div class="sidebar-header">
             <div class="logo">
-                <i class="fas fa-heart"></i>
-                <span>MindWell</span>
+                <div class="logo-icon">
+                    <i class="fas fa-heart"></i>
+                </div>
+                <span class="logo-text">MindWell</span>
             </div>
         </div>
         
@@ -62,15 +64,17 @@
         
         <div class="sidebar-footer">
             <div class="user-profile">
-                <img src="https://ui-avatars.com/api/?name=John+Doe&background=6366f1&color=fff" alt="Profile" class="profile-avatar">
+                <div class="profile-avatar">
+                    <img src="https://ui-avatars.com/api/?name=John+Doe&background=6366f1&color=fff" alt="Profile">
+                </div>
                 <div class="profile-info">
                     <span class="profile-name">John Doe</span>
                     <span class="profile-email">john@example.com</span>
                 </div>
             </div>
-            <button class="btn btn-outline btn-sm" onclick="logout()">
+            <button class="btn btn-outline btn-sm logout-btn" onclick="logout()">
                 <i class="fas fa-sign-out-alt"></i>
-                Logout
+                <span>Logout</span>
             </button>
         </div>
     </aside>
@@ -80,8 +84,16 @@
         <!-- Dashboard Tab -->
         <div id="dashboard" class="tab-content active">
             <div class="page-header">
-                <h1>Welcome back, John!</h1>
-                <p>Here's your mental health overview for today</p>
+                <div class="header-content">
+                    <h1>Welcome back, John!</h1>
+                    <p>Here's your mental health overview for today</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-primary">
+                        <i class="fas fa-plus"></i>
+                        Quick Action
+                    </button>
+                </div>
             </div>
             
             <div class="dashboard-grid">
@@ -133,31 +145,43 @@
                 </div>
                 
                 <!-- Quick Actions -->
-                <div class="quick-actions">
-                    <h2>Quick Actions</h2>
+                <div class="quick-actions card">
+                    <div class="card-header">
+                        <h2>Quick Actions</h2>
+                    </div>
                     <div class="action-buttons">
                         <button class="action-btn mood-btn" onclick="switchTab('mood-tracker')">
-                            <i class="fas fa-chart-line"></i>
+                            <div class="btn-icon">
+                                <i class="fas fa-chart-line"></i>
+                            </div>
                             <span>Log Mood</span>
                         </button>
                         <button class="action-btn meditation-btn" onclick="switchTab('meditation')">
-                            <i class="fas fa-play"></i>
+                            <div class="btn-icon">
+                                <i class="fas fa-play"></i>
+                            </div>
                             <span>Start Meditation</span>
                         </button>
                         <button class="action-btn journal-btn" onclick="switchTab('journal')">
-                            <i class="fas fa-pen"></i>
+                            <div class="btn-icon">
+                                <i class="fas fa-pen"></i>
+                            </div>
                             <span>Write Journal</span>
                         </button>
                         <button class="action-btn crisis-btn" onclick="switchTab('crisis-support')">
-                            <i class="fas fa-phone"></i>
+                            <div class="btn-icon">
+                                <i class="fas fa-phone"></i>
+                            </div>
                             <span>Need Help Now</span>
                         </button>
                     </div>
                 </div>
                 
                 <!-- Recent Activity -->
-                <div class="recent-activity">
-                    <h2>Recent Activity</h2>
+                <div class="recent-activity card">
+                    <div class="card-header">
+                        <h2>Recent Activity</h2>
+                    </div>
                     <div class="activity-list">
                         <div class="activity-item">
                             <div class="activity-icon meditation">
@@ -190,9 +214,13 @@
                 </div>
                 
                 <!-- Mood Chart -->
-                <div class="chart-container">
-                    <h2>Mood Trends (Last 7 Days)</h2>
-                    <canvas id="moodChart"></canvas>
+                <div class="chart-container card">
+                    <div class="card-header">
+                        <h2>Mood Trends (Last 7 Days)</h2>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="moodChart"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
@@ -200,12 +228,16 @@
         <!-- Mood Tracker Tab -->
         <div id="mood-tracker" class="tab-content">
             <div class="page-header">
-                <h1>Mood Tracker</h1>
-                <p>Track your daily emotions and identify patterns</p>
+                <div class="header-content">
+                    <h1>Mood Tracker</h1>
+                    <p>Track your daily emotions and identify patterns</p>
+                </div>
             </div>
             
-            <div class="mood-logger">
-                <h2>How are you feeling today?</h2>
+            <div class="mood-logger card">
+                <div class="card-header">
+                    <h2>How are you feeling today?</h2>
+                </div>
                 <div class="mood-selector">
                     <button class="mood-option" data-mood="very-sad">
                         <i class="fas fa-sad-cry"></i>
@@ -251,8 +283,10 @@
                 </div>
             </div>
             
-            <div class="mood-analytics">
-                <h2>Your Mood Analytics</h2>
+            <div class="mood-analytics card">
+                <div class="card-header">
+                    <h2>Your Mood Analytics</h2>
+                </div>
                 <div class="analytics-grid">
                     <div class="analytics-card">
                         <h3>This Week's Average</h3>
@@ -282,13 +316,17 @@
         <!-- Meditation Tab -->
         <div id="meditation" class="tab-content">
             <div class="page-header">
-                <h1>Meditation & Mindfulness</h1>
-                <p>Find your inner peace with guided meditations and breathing exercises</p>
+                <div class="header-content">
+                    <h1>Meditation & Mindfulness</h1>
+                    <p>Find your inner peace with guided meditations and breathing exercises</p>
+                </div>
             </div>
             
             <div class="meditation-grid">
-                <div class="meditation-player">
-                    <h2>Today's Recommended Session</h2>
+                <div class="meditation-player card">
+                    <div class="card-header">
+                        <h2>Today's Recommended Session</h2>
+                    </div>
                     <div class="player-card">
                         <div class="player-header">
                             <img src="https://via.placeholder.com/300x200/6366f1/ffffff?text=Calm+Waters" alt="Meditation" class="session-image">
@@ -315,8 +353,10 @@
                     </div>
                 </div>
                 
-                <div class="breathing-exercise">
-                    <h2>Breathing Exercise</h2>
+                <div class="breathing-exercise card">
+                    <div class="card-header">
+                        <h2>Breathing Exercise</h2>
+                    </div>
                     <div class="breathing-circle">
                         <div class="circle" id="breathingCircle">
                             <span id="breathingText">Click to Start</span>
@@ -332,8 +372,10 @@
                     </div>
                 </div>
                 
-                <div class="meditation-library">
-                    <h2>Meditation Library</h2>
+                <div class="meditation-library card">
+                    <div class="card-header">
+                        <h2>Meditation Library</h2>
+                    </div>
                     <div class="library-filters">
                         <button class="filter-btn active" data-filter="all">All</button>
                         <button class="filter-btn" data-filter="anxiety">Anxiety</button>

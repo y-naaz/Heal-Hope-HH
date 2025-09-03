@@ -5,7 +5,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 from .models import ChatRoom, Message, ChatParticipant, CrisisAlert, AIResponse
-from .ai_support import get_ai_response, detect_crisis_keywords, analyze_sentiment
+from .ai_support import get_ai_response, detect_crisis_keywords, analyze_sentiment, get_enhanced_ai_response
 import logging
 
 User = get_user_model()
@@ -95,9 +95,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 }
             )
 
-            # Generate AI response if in AI room or crisis detected
+            # Generate AI response for all messages in crisis/support rooms
             room = await self.get_room()
-            if room and (room.room_type == 'ai' or crisis_detected):
+            if room and (room.room_type in ['ai', 'support', 'crisis'] or crisis_detected):
                 await self.generate_ai_response(message, crisis_detected)
 
     async def handle_typing(self, data):
@@ -380,17 +380,39 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def generate_ai_response(self, message, is_crisis=False):
         try:
-            ai_response_text = await database_sync_to_async(get_ai_response)(
-                message.content, 
-                is_crisis=is_crisis,
-                user_context=await self.get_user_context()
+            logger.info(f"Generating AI response for message: {message.content[:50]}...")
+            
+            # Use enhanced AI response with Gemini integration
+            room = await self.get_room()
+            enhanced_result = await database_sync_to_async(get_enhanced_ai_response)(
+                message.content,
+                user=self.user,
+                room=room,
+                message_obj=message
             )
+            
+            ai_response_text = enhanced_result.get('response')
+            logger.info(f"Enhanced AI response generated: {ai_response_text[:100] if ai_response_text else 'None'}...")
+            
+            # Fallback to basic response if enhanced fails
+            if not ai_response_text:
+                logger.warning("Enhanced AI failed, falling back to basic response")
+                ai_response_text = await database_sync_to_async(get_ai_response)(
+                    message.content, 
+                    is_crisis=is_crisis,
+                    user_context=await self.get_user_context()
+                )
+            
+            logger.info(f"AI response generated: {ai_response_text[:100] if ai_response_text else 'None'}...")
             
             if ai_response_text:
                 # Save AI response as message
                 ai_message = await self.save_ai_message(ai_response_text, message)
                 
                 if ai_message:
+                    logger.info(f"AI message saved with ID: {ai_message.id}")
+                    
+                    # Send to room group which will deliver to all participants including self
                     await self.channel_layer.group_send(
                         self.room_group_name,
                         {
@@ -400,9 +422,60 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             'confidence': 0.9 if is_crisis else 0.7
                         }
                     )
+                    
+                    # If crisis detected, send additional crisis alert
+                    if is_crisis:
+                        await self.send_crisis_resources()
+                        
+                    logger.info(f"AI response sent successfully")
+                else:
+                    logger.error("Failed to save AI message to database")
+                    # Send error response if saving failed
+                    await self.send(text_data=json.dumps({
+                        'type': 'error',
+                        'message': 'Failed to save AI response'
+                    }))
+            else:
+                logger.warning("No AI response generated, using fallback")
+                # Send fallback response if no AI response generated
+                fallback_response = "I'm here to listen and support you. How can I help you today?"
+                ai_message = await self.save_ai_message(fallback_response, message)
+                if ai_message:
+                    await self.send(text_data=json.dumps({
+                        'type': 'ai_response',
+                        'message': await self.serialize_message(ai_message),
+                        'response_type': 'supportive',
+                        'confidence': 0.5
+                    }))
 
         except Exception as e:
-            logger.error(f"Error generating AI response: {str(e)}")
+            logger.error(f"Error generating AI response: {str(e)}", exc_info=True)
+            # Send emergency fallback response
+            try:
+                fallback_response = "I'm here to listen and support you. If you're in crisis, please call 988 for immediate help."
+                await self.send(text_data=json.dumps({
+                    'type': 'ai_response',
+                    'message': {
+                        'id': 'fallback',
+                        'content': fallback_response,
+                        'sender': {
+                            'id': 'ai',
+                            'username': 'AI Assistant',
+                            'first_name': 'AI',
+                            'last_name': 'Assistant'
+                        },
+                        'message_type': 'system',
+                        'created_at': datetime.now().isoformat()
+                    },
+                    'response_type': 'supportive',
+                    'confidence': 0.5
+                }))
+            except Exception as final_error:
+                logger.error(f"Final fallback also failed: {str(final_error)}")
+                await self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'message': 'Service temporarily unavailable'
+                }))
 
     @database_sync_to_async
     def save_ai_message(self, content, original_message):
@@ -462,6 +535,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Exception as e:
             logger.error(f"Error getting user context: {str(e)}")
             return {}
+
+    async def send_crisis_resources(self):
+        """Send immediate crisis resources to the user"""
+        from .ai_support import get_emergency_resources
+        
+        resources = await database_sync_to_async(get_emergency_resources)()
+        
+        await self.send(text_data=json.dumps({
+            'type': 'crisis_alert',
+            'alert': {
+                'severity': 'high',
+                'message': 'Crisis indicators detected. Immediate help is available.',
+                'timestamp': datetime.now().isoformat()
+            },
+            'severity': 'high',
+            'resources': resources
+        }))
 
 
 class SupportConsumer(ChatConsumer):

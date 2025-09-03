@@ -8,10 +8,67 @@ let moodChart = null;
 let breathingInterval = null;
 let breathingCycle = 'inhale';
 let breathingTimer = null;
+let isDemoMode = false; // Flag to track if we're in demo mode
+
+// API Configuration
+const API_BASE_URL = 'http://localhost:8000';
+const CHAT_WS_URL = 'ws://localhost:8000';
+
+// API Endpoints
+const API_ENDPOINTS = {
+    auth: {
+        status: `${API_BASE_URL}/users/auth/status/`,
+        profile: `${API_BASE_URL}/users/auth/profile/`,
+        login: `${API_BASE_URL}/users/auth/login/`,
+        logout: `${API_BASE_URL}/users/auth/logout/`
+    },
+    chat: {
+        rooms: `${API_BASE_URL}/chat/rooms/`,
+        messages: `${API_BASE_URL}/chat/messages/`,
+        ai_chat: `${API_BASE_URL}/chat/ai-chat/`
+    },
+    memory: {
+        add: `${API_BASE_URL}/chat/memory/add/`,
+        search: `${API_BASE_URL}/chat/memory/search/`,
+        profile: `${API_BASE_URL}/chat/memory/profile/`
+    },
+    dashboard: {
+        overview: `${API_BASE_URL}/dashboard/api/dashboard-overview/`,
+        activities: `${API_BASE_URL}/dashboard/api/user-activities/`,
+        settings: `${API_BASE_URL}/dashboard/api/user-settings/`
+    },
+    mood: {
+        entries: `${API_BASE_URL}/dashboard/api/mood-entries/`,
+        create: `${API_BASE_URL}/dashboard/api/mood-entries/create/`,
+        analytics: `${API_BASE_URL}/dashboard/api/mood-entries/analytics/`
+    },
+    journal: {
+        entries: `${API_BASE_URL}/dashboard/api/journal-entries/`,
+        create: `${API_BASE_URL}/dashboard/api/journal-entries/create/`,
+        stats: `${API_BASE_URL}/dashboard/api/journal-entries/stats/`
+    },
+    goals: {
+        list: `${API_BASE_URL}/dashboard/api/goals/`,
+        create: `${API_BASE_URL}/dashboard/api/goals/create/`,
+        update: `${API_BASE_URL}/dashboard/api/goals/update/`
+    },
+    meditation: {
+        sessions: `${API_BASE_URL}/dashboard/api/meditation-sessions/`,
+        stats: `${API_BASE_URL}/dashboard/api/meditation-sessions/stats/`
+    },
+    appointments: {
+        list: `${API_BASE_URL}/dashboard/api/appointments/`,
+        create: `${API_BASE_URL}/dashboard/api/appointments/`
+    }
+};
 
 // DOM Content Loaded
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('Dashboard script loaded successfully');
     initializeDashboard();
+    
+    // Add debugging for crisis chat button
+    console.log('Checking if startCrisisChat function exists:', typeof window.startCrisisChat);
 });
 
 // Initialize dashboard
@@ -24,27 +81,138 @@ function initializeDashboard() {
     setupBreathingExercise();
     setupCharts();
     loadUserData();
+    setupCrisisChatButton(); // Add crisis chat button setup
 }
 
-// Check authentication - bypassed for demo
-function checkAuthentication() {
-    const userData = localStorage.getItem('mindwell_user') || sessionStorage.getItem('mindwell_user');
-    if (!userData) {
-        // Create demo user data for testing
-        currentUser = {
-            id: 'demo',
-            firstName: 'Demo',
-            lastName: 'User',
-            email: 'demo@example.com'
-        };
-        isLoggedIn = true;
-        updateUserProfile();
+// Check authentication with backend integration
+async function checkAuthentication() {
+    // Check for demo mode (for testing dynamic functionality)
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('demo') === 'true') {
+        console.log('Demo mode activated - creating test user data');
+        createDemoUser();
         return;
     }
     
-    currentUser = JSON.parse(userData);
-    isLoggedIn = true;
-    updateUserProfile();
+    // First check local storage
+    const isAuthenticated = localStorage.getItem('isAuthenticated');
+    const userData = localStorage.getItem('user');
+    
+    if (!isAuthenticated || !userData) {
+        console.log('No authentication data found in localStorage');
+        redirectToLogin();
+        return;
+    }
+    
+    // Parse user data and set as current user first
+    try {
+        currentUser = JSON.parse(userData);
+        isLoggedIn = true;
+        updateUserProfile();
+        console.log('User data loaded from localStorage:', currentUser);
+        
+        // Load dashboard immediately with local data
+        await loadDashboardData();
+    } catch (parseError) {
+        console.error('Failed to parse user data:', parseError);
+        localStorage.removeItem('user');
+        localStorage.removeItem('isAuthenticated');
+        redirectToLogin();
+        return;
+    }
+    
+    // Verify with backend in the background (don't block the UI)
+    verifyAuthWithBackend();
+}
+
+// Separate function to verify with backend without blocking the UI
+async function verifyAuthWithBackend() {
+    try {
+        console.log('Verifying authentication with backend...');
+        const response = await fetch('http://localhost:8000/users/auth/status/', {
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            console.log('Backend auth check result:', result);
+            
+            if (result.authenticated) {
+                // Update user data with backend response if different
+                if (JSON.stringify(result.user) !== JSON.stringify(currentUser)) {
+                    currentUser = { ...currentUser, ...result.user };
+                    localStorage.setItem('user', JSON.stringify(currentUser));
+                    updateUserProfile();
+                }
+                
+                // Load additional user profile data from backend
+                await loadUserProfileFromBackend();
+            } else {
+                console.log('Backend says user is not authenticated, but continuing with local session');
+                // Don't immediately redirect - the user was just logged in successfully
+                // The backend might have session issues but local auth is valid
+            }
+        } else if (response.status === 401 || response.status === 403) {
+            console.log('Backend auth check failed with auth error:', response.status);
+            // Only redirect if it's been more than 5 minutes since login
+            const loginTime = localStorage.getItem('loginTime');
+            const now = Date.now();
+            if (!loginTime || (now - parseInt(loginTime)) > 5 * 60 * 1000) {
+                console.log('Session has expired, redirecting to login');
+                localStorage.removeItem('user');
+                localStorage.removeItem('isAuthenticated');
+                localStorage.removeItem('loginTime');
+                redirectToLogin();
+            } else {
+                console.log('Recent login, ignoring backend auth error');
+            }
+        } else {
+            console.log('Backend auth check failed with status:', response.status);
+            // Don't redirect on other errors - user data is already loaded
+        }
+    } catch (error) {
+        console.error('Auth check network error:', error);
+        // Network error - continue with local storage data
+        console.log('Continuing with local authentication data due to network error');
+    }
+}
+
+// Redirect to login page
+function redirectToLogin() {
+    showNotification('Please log in to access the dashboard', 'info');
+    setTimeout(() => {
+        window.location.href = 'index.html';
+    }, 2000);
+}
+
+// Load user profile data from backend
+async function loadUserProfileFromBackend() {
+    try {
+        const response = await fetch('http://localhost:8000/users/auth/profile/', {
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        if (response.ok) {
+            const profileData = await response.json();
+            if (profileData.success) {
+                // Update current user with additional profile data
+                currentUser = { ...currentUser, ...profileData.user };
+                updateUserProfile();
+                console.log('Profile data loaded from backend:', profileData.user);
+            }
+        } else {
+            console.log('Failed to load profile data, status:', response.status);
+        }
+    } catch (error) {
+        console.error('Failed to load user profile:', error);
+        // Continue with existing user data
+    }
 }
 
 // Update user profile display
@@ -54,9 +222,16 @@ function updateUserProfile() {
         const profileEmail = document.querySelector('.profile-email');
         const welcomeHeader = document.querySelector('.page-header h1');
         
-        if (profileName) profileName.textContent = `${currentUser.firstName} ${currentUser.lastName}`;
-        if (profileEmail) profileEmail.textContent = currentUser.email;
-        if (welcomeHeader) welcomeHeader.textContent = `Welcome back, ${currentUser.firstName}!`;
+        // Handle both firstName/lastName and first_name/last_name formats
+        const firstName = currentUser.firstName || currentUser.first_name || 'User';
+        const lastName = currentUser.lastName || currentUser.last_name || '';
+        const email = currentUser.email || '';
+        
+        if (profileName) profileName.textContent = `${firstName} ${lastName}`;
+        if (profileEmail) profileEmail.textContent = email;
+        if (welcomeHeader) welcomeHeader.textContent = `Welcome back, ${firstName}!`;
+        
+        console.log('Profile updated with:', { firstName, lastName, email });
     }
 }
 
@@ -129,9 +304,22 @@ function loadTabData(tabName) {
     }
 }
 
-// Setup dashboard data
-function setupDashboardData() {
-    // Initialize with sample data if none exists
+// Setup dashboard data - now using backend APIs
+async function setupDashboardData() {
+    try {
+        // Load real data from backend
+        await loadUserMoodData();
+        await loadUserActivities();
+        await loadUserMemoryProfile();
+    } catch (error) {
+        console.error('Error setting up dashboard data:', error);
+        // Fallback to sample data if backend is unavailable
+        setupFallbackData();
+    }
+}
+
+// Fallback to sample data if backend is unavailable
+function setupFallbackData() {
     if (!localStorage.getItem('mindwell_mood_data')) {
         const sampleMoodData = generateSampleMoodData();
         localStorage.setItem('mindwell_mood_data', JSON.stringify(sampleMoodData));
@@ -140,6 +328,73 @@ function setupDashboardData() {
     if (!localStorage.getItem('mindwell_activities')) {
         const sampleActivities = generateSampleActivities();
         localStorage.setItem('mindwell_activities', JSON.stringify(sampleActivities));
+    }
+}
+
+// Load user mood data from backend
+async function loadUserMoodData() {
+    try {
+        const response = await fetch(API_ENDPOINTS.mood.entries, {
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                localStorage.setItem('mindwell_mood_data', JSON.stringify(data.mood_entries));
+                console.log('Loaded mood data from backend:', data.mood_entries.length, 'entries');
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load mood data:', error);
+    }
+}
+
+// Load user activities from backend
+async function loadUserActivities() {
+    try {
+        const response = await fetch(API_ENDPOINTS.dashboard.activities, {
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                localStorage.setItem('mindwell_activities', JSON.stringify(data.activities));
+                console.log('Loaded activities from backend:', data.activities.length, 'activities');
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load activities:', error);
+    }
+}
+
+// Load user memory profile from Mem0
+async function loadUserMemoryProfile() {
+    try {
+        const response = await fetch(API_ENDPOINTS.memory.profile, {
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                console.log('User memory profile loaded:', data.profile);
+                // Store memory profile for personalization
+                localStorage.setItem('mindwell_memory_profile', JSON.stringify(data.profile));
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load memory profile:', error);
     }
 }
 
@@ -195,22 +450,400 @@ function generateSampleActivities() {
     return activities;
 }
 
-// Load dashboard data
-function loadDashboardData() {
+// Load dashboard data - enhanced with backend integration
+async function loadDashboardData() {
+    // Skip backend calls in demo mode or if not authenticated
+    if (isDemoMode || !isLoggedIn) {
+        console.log('Loading dashboard data in demo/offline mode');
+        await loadFallbackDashboardData();
+        return;
+    }
+    
+    try {
+        // Load comprehensive dashboard data from backend
+        const response = await fetch(API_ENDPOINTS.dashboard.overview, {
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                console.log('Dashboard data loaded from backend:', data);
+                
+                // Update dashboard stats with real data
+                updateDashboardStatsFromBackend(data.dashboard_stats);
+                
+                // Update recent activities with real data
+                updateRecentActivitiesFromBackend(data.recent_activities);
+                
+                // Update mood chart with real data
+                if (moodChart) {
+                    moodChart.destroy();
+                }
+                createMoodChartFromBackend(data.mood_chart_data);
+                
+                // Display insights
+                if (data.insights && data.insights.length > 0) {
+                    displayPersonalizedInsightsFromBackend(data.insights);
+                }
+                
+                return;
+            }
+        } else if (response.status === 401 || response.status === 403) {
+            // Authentication error - don't redirect, just use fallback data
+            console.log('Authentication error loading dashboard data, using fallback');
+            await loadFallbackDashboardData();
+            return;
+        }
+        
+        // Fallback if backend fails
+        console.log('Backend failed, using fallback data');
+        await loadFallbackDashboardData();
+        
+    } catch (error) {
+        console.error('Error loading dashboard data:', error);
+        // Fallback to local data - don't redirect on network errors
+        await loadFallbackDashboardData();
+    }
+}
+
+// Fallback dashboard data loading
+async function loadFallbackDashboardData() {
+    await loadUserMoodData();
+    await loadUserActivities();
+    
     const moodData = JSON.parse(localStorage.getItem('mindwell_mood_data') || '[]');
     const activities = JSON.parse(localStorage.getItem('mindwell_activities') || '[]');
     
-    // Update stats
     updateDashboardStats(moodData);
-    
-    // Update recent activities
     updateRecentActivities(activities);
-    
-    // Update mood chart
-    if (moodChart) {
-        moodChart.destroy();
-    }
+    if (moodChart) moodChart.destroy();
     createMoodChart(moodData);
+    await loadPersonalizedInsights();
+}
+
+// Backend data handling functions
+function updateDashboardStatsFromBackend(dashboardStats) {
+    console.log('Updating dashboard stats from backend:', dashboardStats);
+    
+    // Update today's mood
+    const moodValue = document.querySelector('.stat-card .stat-value');
+    const moodSubtext = document.querySelector('.stat-card .stat-subtext');
+    
+    if (moodValue && dashboardStats.todays_mood) {
+        const moodLabels = {
+            'very-sad': 'Very Sad',
+            'sad': 'Sad', 
+            'neutral': 'Neutral',
+            'good': 'Good',
+            'very-good': 'Very Good'
+        };
+        moodValue.textContent = moodLabels[dashboardStats.todays_mood.mood] || 'Not logged';
+        
+        if (moodSubtext && dashboardStats.todays_mood.change) {
+            const change = dashboardStats.todays_mood.change;
+            moodSubtext.textContent = `${change > 0 ? '+' : ''}${change}% from yesterday`;
+            moodSubtext.className = `stat-subtext ${change > 0 ? 'positive' : change < 0 ? 'negative' : 'neutral'}`;
+        }
+    }
+    
+    // Update meditation streak
+    const streakElements = document.querySelectorAll('.stat-card');
+    if (streakElements.length > 1 && dashboardStats.meditation_streak !== undefined) {
+        const streakValue = streakElements[1].querySelector('.stat-value');
+        const streakSubtext = streakElements[1].querySelector('.stat-subtext');
+        
+        if (streakValue) {
+            streakValue.textContent = `${dashboardStats.meditation_streak} days`;
+        }
+        if (streakSubtext && dashboardStats.meditation_streak > 0) {
+            streakSubtext.textContent = dashboardStats.meditation_streak_text || 'Personal best!';
+            streakSubtext.className = 'stat-subtext positive';
+        }
+    }
+    
+    // Update next session
+    if (streakElements.length > 2 && dashboardStats.next_session) {
+        const sessionValue = streakElements[2].querySelector('.stat-value');
+        const sessionSubtext = streakElements[2].querySelector('.stat-subtext');
+        
+        if (sessionValue) {
+            sessionValue.textContent = dashboardStats.next_session.time || 'Tomorrow';
+        }
+        if (sessionSubtext) {
+            sessionSubtext.textContent = dashboardStats.next_session.details || '2:00 PM with Dr. Smith';
+        }
+    }
+    
+    // Update weekly goals
+    if (streakElements.length > 3 && dashboardStats.weekly_goals) {
+        const goalsValue = streakElements[3].querySelector('.stat-value');
+        const goalsSubtext = streakElements[3].querySelector('.stat-subtext');
+        
+        if (goalsValue) {
+            goalsValue.textContent = dashboardStats.weekly_goals.progress || '4/6';
+        }
+        if (goalsSubtext) {
+            goalsSubtext.textContent = dashboardStats.weekly_goals.status || 'On track';
+            goalsSubtext.className = `stat-subtext ${dashboardStats.weekly_goals.on_track ? 'positive' : 'neutral'}`;
+        }
+    }
+}
+
+function updateRecentActivitiesFromBackend(recentActivities) {
+    console.log('Updating recent activities from backend:', recentActivities);
+    
+    const activityList = document.querySelector('.activity-list');
+    if (!activityList) return;
+    
+    activityList.innerHTML = '';
+    
+    if (!recentActivities || recentActivities.length === 0) {
+        activityList.innerHTML = '<p class="no-activities">No recent activities</p>';
+        return;
+    }
+    
+    recentActivities.slice(0, 5).forEach(activity => {
+        const activityItem = document.createElement('div');
+        activityItem.className = 'activity-item';
+        
+        // Map activity types to icons
+        const iconMap = {
+            'mood': 'fas fa-smile',
+            'meditation': 'fas fa-meditation',
+            'journal': 'fas fa-pen',
+            'goal': 'fas fa-target',
+            'appointment': 'fas fa-calendar',
+            'chat': 'fas fa-comments',
+            'exercise': 'fas fa-dumbbell',
+            'sleep': 'fas fa-bed'
+        };
+        
+        const icon = iconMap[activity.activity_type] || activity.icon || 'fas fa-circle';
+        
+        activityItem.innerHTML = `
+            <div class="activity-icon ${activity.activity_type}">
+                <i class="${icon}"></i>
+            </div>
+            <div class="activity-content">
+                <h4>${activity.title || activity.description}</h4>
+                <span class="activity-time">${getTimeAgo(activity.created_at || activity.timestamp)}</span>
+            </div>
+        `;
+        
+        activityList.appendChild(activityItem);
+    });
+}
+
+function createMoodChartFromBackend(moodChartData) {
+    console.log('Creating mood chart from backend data:', moodChartData);
+    
+    const canvas = document.getElementById('moodChart');
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    
+    if (!moodChartData || !moodChartData.labels || !moodChartData.scores) {
+        console.log('Invalid mood chart data, skipping chart creation');
+        return;
+    }
+    
+    // Ensure we have valid data
+    const labels = moodChartData.labels || [];
+    const scores = moodChartData.scores || [];
+    
+    if (labels.length === 0 || scores.length === 0) {
+        console.log('Empty mood chart data, skipping chart creation');
+        return;
+    }
+    
+    moodChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Mood Score',
+                data: scores,
+                borderColor: '#6366f1',
+                backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                borderWidth: 3,
+                fill: true,
+                tension: 0.4,
+                pointBackgroundColor: '#6366f1',
+                pointBorderColor: '#ffffff',
+                pointBorderWidth: 2,
+                pointRadius: 6,
+                pointHoverRadius: 8
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 10,
+                    ticks: {
+                        stepSize: 2,
+                        callback: function(value) {
+                            const moodLabels = {
+                                0: 'Very Sad',
+                                2: 'Sad', 
+                                4: 'Low',
+                                6: 'Neutral',
+                                8: 'Good',
+                                10: 'Very Good'
+                            };
+                            return moodLabels[value] || value;
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.1)'
+                    }
+                },
+                x: {
+                    grid: {
+                        display: false
+                    }
+                }
+            },
+            elements: {
+                point: {
+                    hoverRadius: 8
+                }
+            },
+            interaction: {
+                intersect: false,
+                mode: 'index'
+            }
+        }
+    });
+}
+
+function displayPersonalizedInsightsFromBackend(insights) {
+    console.log('Displaying personalized insights from backend:', insights);
+    
+    let insightsContainer = document.querySelector('.personalized-insights');
+    
+    if (!insightsContainer) {
+        // Create insights container if it doesn't exist
+        const dashboardGrid = document.querySelector('.dashboard-grid');
+        if (dashboardGrid) {
+            insightsContainer = document.createElement('div');
+            insightsContainer.className = 'personalized-insights card';
+            insightsContainer.innerHTML = `
+                <div class="card-header">
+                    <h2><i class="fas fa-lightbulb"></i> Your Personal Insights</h2>
+                </div>
+                <div class="insights-content">
+                    <div class="insight-list"></div>
+                </div>
+            `;
+            dashboardGrid.appendChild(insightsContainer);
+        }
+    }
+    
+    const insightsList = document.querySelector('.insight-list');
+    if (!insightsList) return;
+    
+    if (!insights || insights.length === 0) {
+        insightsList.innerHTML = '<p class="no-insights">No insights available yet. Keep tracking your mood and activities!</p>';
+        return;
+    }
+    
+    insightsList.innerHTML = insights.map(insight => {
+        const insightTypes = {
+            'mood_trend': 'fas fa-chart-line',
+            'activity_pattern': 'fas fa-clock',
+            'goal_progress': 'fas fa-target',
+            'recommendation': 'fas fa-star',
+            'achievement': 'fas fa-trophy',
+            'tip': 'fas fa-lightbulb'
+        };
+        
+        const icon = insightTypes[insight.type] || 'fas fa-info-circle';
+        
+        return `
+            <div class="insight-item">
+                <i class="${icon}"></i>
+                <div class="insight-content">
+                    <h4>${insight.title || 'Personal Insight'}</h4>
+                    <p>${insight.content || insight.description}</p>
+                    ${insight.action_text ? `
+                        <button class="btn btn-outline btn-sm" onclick="${insight.action || 'showNotification(\'Feature coming soon!\', \'info\')'}">
+                            ${insight.action_text}
+                        </button>
+                    ` : ''}
+                </div>
+                <small class="insight-time">${getTimeAgo(insight.created_at || insight.timestamp || Date.now())}</small>
+            </div>
+        `;
+    }).join('');
+}
+
+// Load personalized insights using memory system
+async function loadPersonalizedInsights() {
+    try {
+        const response = await fetch(API_ENDPOINTS.memory.search, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                query: 'mood patterns and mental health insights',
+                limit: 5
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.memories.length > 0) {
+                displayPersonalizedInsights(data.memories);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load personalized insights:', error);
+    }
+}
+
+// Display personalized insights
+function displayPersonalizedInsights(memories) {
+    const insightsContainer = document.querySelector('.personalized-insights');
+    if (!insightsContainer) {
+        // Create insights container if it doesn't exist
+        const dashboardGrid = document.querySelector('.dashboard-grid');
+        const insightsCard = document.createElement('div');
+        insightsCard.className = 'personalized-insights card';
+        insightsCard.innerHTML = `
+            <div class="card-header">
+                <h2>Your Personal Insights</h2>
+            </div>
+            <div class="insights-content">
+                <div class="insight-list"></div>
+            </div>
+        `;
+        dashboardGrid.appendChild(insightsCard);
+    }
+    
+    const insightsList = document.querySelector('.insight-list');
+    if (insightsList) {
+        insightsList.innerHTML = memories.map(memory => `
+            <div class="insight-item">
+                <i class="fas fa-lightbulb"></i>
+                <p>${memory.content}</p>
+                <small>${getTimeAgo(memory.created_at)}</small>
+            </div>
+        `).join('');
+    }
 }
 
 // Update dashboard stats
@@ -340,8 +973,8 @@ function setupMoodTracking() {
     });
 }
 
-// Save mood entry
-function saveMood() {
+// Save mood entry - now with backend integration
+async function saveMood() {
     const selectedMood = document.querySelector('.mood-option.selected');
     const moodNote = document.querySelector('.mood-details textarea').value;
     const selectedFactors = Array.from(document.querySelectorAll('.factor-tag.selected'))
@@ -352,49 +985,82 @@ function saveMood() {
         return;
     }
     
-    const moodData = JSON.parse(localStorage.getItem('mindwell_mood_data') || '[]');
-    const today = new Date().toISOString().split('T')[0];
-    
-    // Remove existing entry for today
-    const filteredData = moodData.filter(entry => entry.date !== today);
-    
-    // Add new entry
     const moodScores = { 'very-sad': 2, 'sad': 4, 'neutral': 6, 'good': 8, 'very-good': 10 };
-    const newEntry = {
-        date: today,
+    const moodEntry = {
         mood: selectedMood.getAttribute('data-mood'),
         score: moodScores[selectedMood.getAttribute('data-mood')],
         note: moodNote,
         factors: selectedFactors,
-        timestamp: new Date().toISOString()
+        date: new Date().toISOString().split('T')[0]
     };
     
-    filteredData.push(newEntry);
-    filteredData.sort((a, b) => new Date(a.date) - new Date(b.date));
-    
-    localStorage.setItem('mindwell_mood_data', JSON.stringify(filteredData));
-    
-    // Add to activities
-    const activities = JSON.parse(localStorage.getItem('mindwell_activities') || '[]');
-    activities.unshift({
-        id: Date.now(),
-        type: 'mood',
-        title: `Logged mood: ${selectedMood.textContent.trim()}`,
-        timestamp: new Date().toISOString(),
-        icon: 'fas fa-smile'
-    });
-    localStorage.setItem('mindwell_activities', JSON.stringify(activities.slice(0, 10)));
-    
-    showNotification('Mood logged successfully!', 'success');
-    
-    // Reset form
-    selectedMood.classList.remove('selected');
-    document.querySelector('.mood-details textarea').value = '';
-    document.querySelectorAll('.factor-tag.selected').forEach(tag => tag.classList.remove('selected'));
-    
-    // Update dashboard if we're on it
-    if (currentTab === 'dashboard') {
-        loadDashboardData();
+    try {
+        // Save to backend
+        const response = await fetch(API_ENDPOINTS.mood.entries, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(moodEntry)
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                // Add to Mem0 memory system
+                await addToMemorySystem('mood', `User logged mood: ${selectedMood.textContent.trim()}. Note: ${moodNote}. Factors: ${selectedFactors.join(', ')}`);
+                
+                // Update local storage for immediate UI update
+                await loadUserMoodData();
+                
+                showNotification('Mood logged successfully!', 'success');
+                
+                // Reset form
+                selectedMood.classList.remove('selected');
+                document.querySelector('.mood-details textarea').value = '';
+                document.querySelectorAll('.factor-tag.selected').forEach(tag => tag.classList.remove('selected'));
+                
+                // Update dashboard if we're on it
+                if (currentTab === 'dashboard') {
+                    loadDashboardData();
+                }
+            } else {
+                throw new Error(data.message || 'Failed to save mood');
+            }
+        } else {
+            throw new Error('Failed to connect to server');
+        }
+    } catch (error) {
+        console.error('Error saving mood:', error);
+        showNotification('Failed to save mood. Please try again.', 'error');
+    }
+}
+
+// Add entry to Mem0 memory system
+async function addToMemorySystem(category, content) {
+    try {
+        const response = await fetch(API_ENDPOINTS.memory.add, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                content: content,
+                category: category,
+                metadata: {
+                    timestamp: new Date().toISOString(),
+                    source: 'dashboard'
+                }
+            })
+        });
+        
+        if (response.ok) {
+            console.log('Added to memory system:', category, content);
+        }
+    } catch (error) {
+        console.error('Failed to add to memory system:', error);
     }
 }
 
@@ -698,13 +1364,276 @@ function showNotification(message, type = 'info') {
     }, 5000);
 }
 
-// Load placeholder data for other tabs (stub functions)
-function loadMeditationData() { /* Meditation-specific data loading */ }
-function loadAppointmentsData() { /* Appointments-specific data loading */ }
-function loadCommunityData() { /* Community-specific data loading */ }
-function loadResourcesData() { /* Resources-specific data loading */ }
-function loadGoalsData() { /* Goals-specific data loading */ }
-function loadJournalData() { /* Journal-specific data loading */ }
+// Load placeholder data for other tabs with proper error handling
+function loadMeditationData() {
+    // Skip backend calls in demo mode or if not authenticated
+    if (isDemoMode || !isLoggedIn) {
+        console.log('Loading meditation data in demo/offline mode');
+        const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
+        updateMeditationStats(meditationStats);
+        return;
+    }
+    
+    // Load meditation data from backend with error handling
+    fetch(API_ENDPOINTS.meditation.stats, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.json();
+        } else if (response.status === 401 || response.status === 403) {
+            // Don't redirect on auth errors, just use local data
+            console.log('Auth error loading meditation data, using local data');
+            return null;
+        }
+        throw new Error('Failed to load meditation data');
+    })
+    .then(data => {
+        if (data && data.success) {
+            localStorage.setItem('mindwell_meditation_stats', JSON.stringify(data.stats));
+            updateMeditationStats(data.stats);
+        } else {
+            // Fallback to local data
+            const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
+            updateMeditationStats(meditationStats);
+        }
+    })
+    .catch(error => {
+        console.error('Error loading meditation data:', error);
+        // Fallback to local data without redirecting
+        const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
+        updateMeditationStats(meditationStats);
+    });
+}
+
+function loadAppointmentsData() {
+    // Skip backend calls in demo mode or if not authenticated
+    if (isDemoMode || !isLoggedIn) {
+        console.log('Loading appointments data in demo/offline mode');
+        const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
+        updateAppointmentsList(appointments);
+        return;
+    }
+    
+    // Load appointments from backend with error handling
+    fetch(API_ENDPOINTS.appointments.list, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.json();
+        } else if (response.status === 401 || response.status === 403) {
+            console.log('Auth error loading appointments, using local data');
+            return null;
+        }
+        throw new Error('Failed to load appointments');
+    })
+    .then(data => {
+        if (data && data.success) {
+            localStorage.setItem('mindwell_appointments', JSON.stringify(data.appointments));
+            updateAppointmentsList(data.appointments);
+        } else {
+            const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
+            updateAppointmentsList(appointments);
+        }
+    })
+    .catch(error => {
+        console.error('Error loading appointments:', error);
+        const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
+        updateAppointmentsList(appointments);
+    });
+}
+
+function loadCommunityData() {
+    // Skip backend calls in demo mode or if not authenticated  
+    if (isDemoMode || !isLoggedIn) {
+        console.log('Loading community data in demo/offline mode');
+        const posts = JSON.parse(localStorage.getItem('mindwell_community_posts') || '[]');
+        updateCommunityFeed(posts);
+        return;
+    }
+    
+    // Community data is typically local for now, but add error handling for future backend integration
+    const posts = JSON.parse(localStorage.getItem('mindwell_community_posts') || '[]');
+    updateCommunityFeed(posts);
+}
+
+function loadResourcesData() {
+    // Skip backend calls in demo mode or if not authenticated
+    if (isDemoMode || !isLoggedIn) {
+        console.log('Loading resources data in demo/offline mode');
+        const resources = JSON.parse(localStorage.getItem('mindwell_resources') || '[]');
+        updateResourcesGrid(resources);
+        return;
+    }
+    
+    // Resources are typically local for now, but add error handling for future backend integration
+    const resources = JSON.parse(localStorage.getItem('mindwell_resources') || '[]');
+    updateResourcesGrid(resources);
+}
+
+function loadGoalsData() {
+    // Skip backend calls in demo mode or if not authenticated
+    if (isDemoMode || !isLoggedIn) {
+        console.log('Loading goals data in demo/offline mode');
+        const goals = JSON.parse(localStorage.getItem('mindwell_goals') || '[]');
+        const goalsList = document.querySelector('.goal-list');
+        if (goalsList) {
+            // Use existing loadGoalsData logic but with local data
+            loadGoalsDataLocal();
+        }
+        return;
+    }
+    
+    // Load goals from backend with error handling
+    fetch(API_ENDPOINTS.goals.list, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.json();
+        } else if (response.status === 401 || response.status === 403) {
+            console.log('Auth error loading goals, using local data');
+            return null;
+        }
+        throw new Error('Failed to load goals');
+    })
+    .then(data => {
+        if (data && data.success) {
+            localStorage.setItem('mindwell_goals', JSON.stringify(data.goals));
+            loadGoalsDataLocal();
+        } else {
+            loadGoalsDataLocal();
+        }
+    })
+    .catch(error => {
+        console.error('Error loading goals:', error);
+        loadGoalsDataLocal();
+    });
+}
+
+function loadJournalData() {
+    // Skip backend calls in demo mode or if not authenticated
+    if (isDemoMode || !isLoggedIn) {
+        console.log('Loading journal data in demo/offline mode');
+        loadJournalDataLocal();
+        return;
+    }
+    
+    // Load journal from backend with error handling
+    fetch(API_ENDPOINTS.journal.entries, {
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(response => {
+        if (response.ok) {
+            return response.json();
+        } else if (response.status === 401 || response.status === 403) {
+            console.log('Auth error loading journal, using local data');
+            return null;
+        }
+        throw new Error('Failed to load journal');
+    })
+    .then(data => {
+        if (data && data.success) {
+            localStorage.setItem('mindwell_journal_entries', JSON.stringify(data.entries));
+            loadJournalDataLocal();
+        } else {
+            loadJournalDataLocal();
+        }
+    })
+    .catch(error => {
+        console.error('Error loading journal:', error);
+        loadJournalDataLocal();
+    });
+}
+
+// Helper functions for local data loading
+function loadGoalsDataLocal() {
+    const goals = JSON.parse(localStorage.getItem('mindwell_goals') || '[]');
+    const goalsList = document.querySelector('.goal-list');
+    
+    if (!goalsList) return;
+    
+    goalsList.innerHTML = '';
+    
+    goals.forEach(goal => {
+        const progress = Math.min((goal.currentValue / goal.targetValue) * 100, 100);
+        const isCompleted = progress >= 100;
+        
+        const goalCard = document.createElement('div');
+        goalCard.className = `goal-card ${isCompleted ? 'completed' : 'active'}`;
+        goalCard.innerHTML = `
+            <div class="goal-header">
+                <h3>${goal.title}</h3>
+                <span class="goal-status ${isCompleted ? 'completed' : 'in-progress'}">${isCompleted ? 'Completed' : 'In Progress'}</span>
+            </div>
+            <p>${goal.description}</p>
+            <div class="goal-progress">
+                <div class="progress-info">
+                    <span>Progress: ${goal.currentValue}/${goal.targetValue} ${goal.unit}</span>
+                    <span>${Math.round(progress)}%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress" style="width: ${progress}%"></div>
+                </div>
+            </div>
+            ${isCompleted ? 
+                `<div class="goal-completion">
+                    <i class="fas fa-trophy"></i>
+                    <span>Completed on ${formatDate(goal.endDate)}</span>
+                </div>` :
+                `<div class="goal-actions">
+                    <button class="btn btn-outline btn-sm" onclick="updateGoalProgress(${goal.id}, 1)">+1</button>
+                    <button class="btn btn-outline btn-sm" onclick="editGoal(${goal.id})">Edit</button>
+                    <button class="btn btn-primary btn-sm" onclick="markGoalComplete(${goal.id})">Mark Complete</button>
+                </div>`
+            }
+        `;
+        goalsList.appendChild(goalCard);
+    });
+}
+
+function loadJournalDataLocal() {
+    const entries = JSON.parse(localStorage.getItem('mindwell_journal_entries') || '[]');
+    const entriesList = document.querySelector('.entries-list');
+    
+    if (!entriesList) return;
+    
+    entriesList.innerHTML = '';
+    
+    entries.slice(0, 10).forEach(entry => {
+        const entryCard = document.createElement('div');
+        entryCard.className = 'entry-card';
+        entryCard.innerHTML = `
+            <div class="entry-header">
+                <h3>${entry.title}</h3>
+                <div class="entry-meta">
+                    <span class="entry-mood">${getMoodEmoji(entry.mood)}</span>
+                    <span class="entry-date">${formatDate(entry.date)}</span>
+                </div>
+            </div>
+            <div class="entry-preview">
+                <p>${entry.content.substring(0, 150)}${entry.content.length > 150 ? '...' : ''}</p>
+            </div>
+            <div class="entry-tags">
+                ${entry.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}
+            </div>
+            <div class="entry-actions">
+                <button class="btn btn-outline btn-sm" onclick="editJournalEntry(${entry.id})">Edit</button>
+                <button class="btn btn-outline btn-sm" onclick="viewJournalEntry(${entry.id})">View Full</button>
+                <button class="btn btn-outline btn-sm" onclick="deleteJournalEntry(${entry.id})">Delete</button>
+            </div>
+            <div class="entry-stats">
+                <small>${entry.wordCount} words • ${getTimeAgo(entry.createdAt)}</small>
+            </div>
+        `;
+        entriesList.appendChild(entryCard);
+    });
+}
 
 // Journal Management System
 function initializeJournal() {
@@ -735,7 +1664,7 @@ function initializeJournal() {
     }
 }
 
-function saveJournalEntry() {
+async function saveJournalEntry() {
     const title = document.querySelector('.entry-title').value.trim();
     const content = document.querySelector('.journal-editor').value.trim();
     const mood = document.querySelector('.mood-select').value;
@@ -751,16 +1680,65 @@ function saveJournalEntry() {
     const selectedTags = Array.from(document.querySelectorAll('.tag-btn.selected')).map(btn => btn.textContent);
     const allTags = [...new Set([...tags, ...selectedTags])];
     
-    const entries = JSON.parse(localStorage.getItem('mindwell_journal_entries') || '[]');
-    const newEntry = {
-        id: Date.now(),
+    const journalEntry = {
         title,
         content,
         mood,
         tags: allTags,
         date: date || new Date().toISOString().split('T')[0],
         wordCount: content.split(/\s+/).length,
-        isPrivate: false,
+        isPrivate: false
+    };
+    
+    try {
+        // Save to backend
+        const response = await fetch(API_ENDPOINTS.journal.entries, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(journalEntry)
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                // Add to memory system for future insights
+                await addToMemorySystem('journal', `Journal entry: ${title}. Content summary: ${content.substring(0, 200)}...`);
+                
+                showNotification('Journal entry saved successfully!', 'success');
+                
+                // Clear form
+                document.querySelector('.entry-title').value = '';
+                document.querySelector('.journal-editor').value = '';
+                document.querySelector('.mood-select').value = '';
+                document.querySelector('.tag-input').value = '';
+                document.querySelectorAll('.tag-btn.selected').forEach(btn => btn.classList.remove('selected'));
+                
+                // Refresh journal list
+                await loadJournalData();
+            } else {
+                throw new Error(data.message || 'Failed to save journal entry');
+            }
+        } else {
+            throw new Error('Failed to connect to server');
+        }
+    } catch (error) {
+        console.error('Error saving journal entry:', error);
+        showNotification('Failed to save journal entry. Please try again.', 'error');
+        
+        // Fallback to local storage
+        saveJournalEntryLocal(journalEntry);
+    }
+}
+
+// Fallback local save for journal entries
+function saveJournalEntryLocal(journalEntry) {
+    const entries = JSON.parse(localStorage.getItem('mindwell_journal_entries') || '[]');
+    const newEntry = {
+        id: Date.now(),
+        ...journalEntry,
         createdAt: new Date().toISOString(),
         lastModified: new Date().toISOString()
     };
@@ -768,29 +1746,8 @@ function saveJournalEntry() {
     entries.unshift(newEntry);
     localStorage.setItem('mindwell_journal_entries', JSON.stringify(entries));
     
-    // Add to activities
-    const activities = JSON.parse(localStorage.getItem('mindwell_activities') || '[]');
-    activities.unshift({
-        id: Date.now(),
-        type: 'journal',
-        title: `Added journal entry: ${title}`,
-        timestamp: new Date().toISOString(),
-        icon: 'fas fa-pen'
-    });
-    localStorage.setItem('mindwell_activities', JSON.stringify(activities.slice(0, 20)));
-    
-    showNotification('Journal entry saved successfully!', 'success');
-    
-    // Clear form
-    document.querySelector('.entry-title').value = '';
-    document.querySelector('.journal-editor').value = '';
-    document.querySelector('.mood-select').value = '';
-    document.querySelector('.tag-input').value = '';
-    document.querySelectorAll('.tag-btn.selected').forEach(btn => btn.classList.remove('selected'));
-    
-    // Refresh journal list
+    showNotification('Journal entry saved locally!', 'info');
     loadJournalData();
-    updateJournalStats();
 }
 
 function loadJournalData() {
@@ -1205,13 +2162,50 @@ function saveAppointment(form) {
     loadAppointmentsData();
 }
 
+// Setup crisis chat button with event listener
+function setupCrisisChatButton() {
+    console.log('Setting up crisis chat button...');
+    
+    // Try to find the button and add event listener
+    setTimeout(() => {
+        const crisisChatButton = document.querySelector('button[onclick*="startCrisisChat"]');
+        console.log('Crisis chat button found:', !!crisisChatButton);
+        
+        if (crisisChatButton) {
+            // Remove onclick attribute and add event listener
+            crisisChatButton.removeAttribute('onclick');
+            crisisChatButton.addEventListener('click', function(e) {
+                e.preventDefault();
+                console.log('Crisis chat button clicked via event listener');
+                startCrisisChat();
+            });
+            console.log('Event listener added to crisis chat button');
+        } else {
+            console.log('Crisis chat button not found yet, will retry...');
+            // Retry after a short delay if the button isn't found yet
+            setTimeout(setupCrisisChatButton, 1000);
+        }
+    }, 100);
+}
+
 // WebSocket connection for real-time chat
 let chatSocket = null;
 let reconnectAttempts = 0;
 const maxReconnectAttempts = 5;
 
-// Crisis Support Features
-function startCrisisChat() {
+// Enhanced Crisis Support with AI and Memory Integration
+async function startCrisisChat() {
+    console.log('Starting crisis chat with AI and memory integration...');
+    
+    // Remove any existing chat modal first
+    const existingChat = document.getElementById('crisisChat');
+    if (existingChat) {
+        existingChat.remove();
+    }
+    
+    // Log crisis chat initiation to memory system
+    await addToMemorySystem('crisis', 'User initiated crisis support chat');
+    
     const chatHtml = `
         <div id="crisisChat" class="chat-modal-overlay">
             <div class="chat-modal-container">
@@ -1295,31 +2289,35 @@ function startCrisisChat() {
     
     // Setup event listeners
     const chatInput = document.getElementById('chatInput');
-    chatInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendChatMessage();
-        }
-    });
-    
-    chatInput.addEventListener('input', function() {
-        if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
-            chatSocket.send(JSON.stringify({
-                'type': 'typing',
-                'is_typing': this.value.length > 0
-            }));
-        }
-    });
+    if (chatInput) {
+        chatInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendChatMessage();
+            }
+        });
+        
+        chatInput.addEventListener('input', function() {
+            if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+                chatSocket.send(JSON.stringify({
+                    'type': 'typing',
+                    'is_typing': this.value.length > 0
+                }));
+            }
+        });
+    }
     
     // Connect to WebSocket
     connectToSupportChat();
+    
+    console.log('Crisis chat modal created successfully');
 }
 
-// Connect to WebSocket for crisis support
+// Connect to WebSocket for crisis support with enhanced AI
 function connectToSupportChat() {
-    const userId = currentUser?.id || 'anonymous';
+    const userId = currentUser?.id || currentUser?.username || 'demo';
     const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsPath = `${wsScheme}://localhost:8001/ws/support/${userId}/`;
+    const wsPath = `${wsScheme}://127.0.0.1:8000/ws/crisis/${userId}/`;
     
     try {
         chatSocket = new WebSocket(wsPath);
@@ -1382,12 +2380,29 @@ function handleChatMessage(data) {
     const chatMessages = document.getElementById('chatMessages');
     const typingIndicator = document.getElementById('typingIndicator');
     
+    console.log('Received message:', data.type, data);
+    
     switch (data.type) {
         case 'ai_response':
+            console.log('Handling AI response:', data.message);
             hideTypingIndicator();
             addChatMessage(data.message, 'bot');
             if (data.response_type === 'crisis_intervention') {
                 showCrisisResources();
+            }
+            break;
+            
+        case 'chat_message':
+            // Handle regular chat messages from other users
+            console.log('Handling chat message:', data.message);
+            hideTypingIndicator();
+            // Don't add our own messages again - check both id and username
+            const currentUserId = currentUser?.id || 'demo';
+            const currentUsername = currentUser?.username || 'You';
+            if (data.message.sender.id !== currentUserId && 
+                data.message.sender.username !== currentUsername &&
+                data.message.sender.username !== 'demo') {
+                addChatMessage(data.message, 'user');
             }
             break;
             
@@ -1397,7 +2412,9 @@ function handleChatMessage(data) {
             break;
             
         case 'typing_indicator':
-            if (data.is_typing) {
+            // Exclude AI from typing indicators and only show for other real users
+            const isAI = data.username === 'ai_assistant' || data.username === 'AI Assistant' || data.user_id === 'ai';
+            if (data.is_typing && data.user_id !== (currentUser?.id || 'demo') && !isAI) {
                 showTypingIndicator();
             } else {
                 hideTypingIndicator();
@@ -1409,12 +2426,17 @@ function handleChatMessage(data) {
             break;
             
         case 'error':
+            hideTypingIndicator();
             showNotification('Chat error: ' + data.message, 'error');
+            break;
+            
+        default:
+            console.log('Unknown message type:', data.type);
             break;
     }
 }
 
-function sendChatMessage() {
+async function sendChatMessage() {
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
     
@@ -1425,17 +2447,15 @@ function sendChatMessage() {
         return;
     }
     
-    // Add user message to UI immediately
-    addChatMessage({
-        content: message,
-        sender: currentUser || { username: 'You', first_name: 'You' },
-        created_at: new Date().toISOString()
-    }, 'user');
+    // Add user message to memory system for context
+    await addToMemorySystem('crisis_chat', `User message: ${message}`);
     
-    // Send message to server
+    // Send message to server with memory context
     chatSocket.send(JSON.stringify({
         'type': 'chat_message',
-        'message': message
+        'message': message,
+        'include_memory': true,
+        'use_rag': true
     }));
     
     input.value = '';
@@ -1502,18 +2522,24 @@ function addCrisisAlert(data) {
     
     const alertDiv = document.createElement('div');
     alertDiv.className = 'chat-message crisis-alert';
+    
+    // Safely handle alert data
+    const alert = data.alert || {};
+    const alertReason = alert.alert_reason || alert.message || 'Crisis support has been activated for your safety.';
+    const resources = data.resources || [];
+    
     alertDiv.innerHTML = `
         <div class="alert-content">
             <div class="alert-header">
                 <i class="fas fa-exclamation-triangle"></i>
                 <strong>Crisis Alert Activated</strong>
             </div>
-            <p>${data.alert.alert_reason || 'Crisis support has been activated for your safety.'}</p>
+            <p>${alertReason}</p>
             <div class="crisis-resources">
                 <h4>Immediate Help:</h4>
-                ${data.resources.map(resource => 
-                    `<a href="tel:${resource.contact.replace(/[^0-9]/g, '')}" class="crisis-resource-btn">
-                        <i class="fas fa-phone"></i> ${resource.name}: ${resource.contact}
+                ${resources.map(resource => 
+                    `<a href="tel:${(resource.contact || '').replace(/[^0-9]/g, '')}" class="crisis-resource-btn">
+                        <i class="fas fa-phone"></i> ${resource.name || 'Emergency Service'}: ${resource.contact || 'Contact Available'}
                     </a>`
                 ).join('')}
             </div>
@@ -1862,13 +2888,161 @@ function closeEmergencyContacts() {
     if (modal) modal.remove();
 }
 
-// Enhanced Data Initialization
-function initializeAllData() {
-    initializeJournal();
-    initializeGoals();
-    initializeCommunity();
-    initializeResources();
-    initializeAppointments();
+// Enhanced Data Initialization with Backend Integration
+async function initializeAllData() {
+    try {
+        // Try to load data from backend first
+        await Promise.all([
+            loadJournalDataFromBackend(),
+            loadGoalsDataFromBackend(),
+            loadUserMoodData(),
+            loadUserActivities()
+        ]);
+        console.log('Successfully loaded data from backend');
+    } catch (error) {
+        console.error('Failed to load from backend, using local fallback:', error);
+        // Fallback to local initialization
+        initializeJournal();
+        initializeGoals();
+        initializeCommunity();
+        initializeResources();
+        initializeAppointments();
+    }
+}
+
+// Load journal data from backend
+async function loadJournalDataFromBackend() {
+    try {
+        const response = await fetch(API_ENDPOINTS.journal.entries, {
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                localStorage.setItem('mindwell_journal_entries', JSON.stringify(data.entries));
+                console.log('Loaded journal entries from backend:', data.entries.length);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load journal data from backend:', error);
+        initializeJournal(); // Fallback
+    }
+}
+
+// Load goals data from backend  
+async function loadGoalsDataFromBackend() {
+    try {
+        const response = await fetch(API_ENDPOINTS.goals.list, {
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                localStorage.setItem('mindwell_goals', JSON.stringify(data.goals));
+                console.log('Loaded goals from backend:', data.goals.length);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load goals data from backend:', error);
+        initializeGoals(); // Fallback
+    }
+}
+
+// Enhanced AI Chat Integration
+async function sendAIChatMessage(message, context = {}) {
+    try {
+        const response = await fetch(API_ENDPOINTS.chat.ai_chat, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                message: message,
+                use_memory: true,
+                use_rag: true,
+                context: context,
+                room_type: 'crisis_support'
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            return data;
+        } else {
+            throw new Error('Failed to get AI response');
+        }
+    } catch (error) {
+        console.error('Error in AI chat:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+// Get personalized recommendations using RAG
+async function getPersonalizedRecommendations() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/chat/recommendations/`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                use_memory: true,
+                use_rag: true,
+                category: 'mental_health_recommendations'
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                displayPersonalizedRecommendations(data.recommendations);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to get personalized recommendations:', error);
+    }
+}
+
+// Display personalized recommendations
+function displayPersonalizedRecommendations(recommendations) {
+    const dashboardGrid = document.querySelector('.dashboard-grid');
+    const existingRecommendations = document.querySelector('.personalized-recommendations');
+    
+    if (existingRecommendations) {
+        existingRecommendations.remove();
+    }
+    
+    const recommendationsCard = document.createElement('div');
+    recommendationsCard.className = 'personalized-recommendations card';
+    recommendationsCard.innerHTML = `
+        <div class="card-header">
+            <h2>🎯 Personalized for You</h2>
+        </div>
+        <div class="recommendations-content">
+            ${recommendations.map(rec => `
+                <div class="recommendation-item">
+                    <i class="fas fa-${rec.icon || 'star'}"></i>
+                    <div class="rec-content">
+                        <h4>${rec.title}</h4>
+                        <p>${rec.description}</p>
+                        ${rec.action ? `<button class="btn btn-outline btn-sm" onclick="${rec.action}">${rec.action_text}</button>` : ''}
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+    
+    dashboardGrid.appendChild(recommendationsCard);
 }
 
 function initializeCommunity() {
@@ -2170,6 +3344,227 @@ function logout() {
     localStorage.removeItem('mindwell_user');
     sessionStorage.removeItem('mindwell_user');
     window.location.href = 'index.html';
+}
+
+// Create demo user data for testing dynamic functionality
+function createDemoUser() {
+    console.log('Creating demo user data...');
+    
+    // Set demo mode flag to prevent backend API calls
+    isDemoMode = true;
+    
+    // Set demo user data
+    currentUser = {
+        id: 'demo',
+        username: 'demo',
+        firstName: 'Yasmeen',
+        lastName: 'Demo',
+        email: 'yasmeen.demo@mindwell.com'
+    };
+    
+    isLoggedIn = true;
+    updateUserProfile();
+    
+    // Create comprehensive demo data
+    const demoMoodData = [
+        {
+            date: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            mood: 'neutral',
+            score: 6,
+            note: '',
+            factors: ['Sleep']
+        },
+        {
+            date: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            mood: 'good',
+            score: 8,
+            note: 'Had a good therapy session',
+            factors: ['Therapy', 'Exercise']
+        },
+        {
+            date: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            mood: 'sad',
+            score: 4,
+            note: 'Feeling stressed about work',
+            factors: ['Work', 'Stress']
+        },
+        {
+            date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            mood: 'neutral',
+            score: 6,
+            note: '',
+            factors: ['Sleep']
+        },
+        {
+            date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            mood: 'good',
+            score: 8,
+            note: 'Meditation helped a lot',
+            factors: ['Meditation', 'Exercise']
+        },
+        {
+            date: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            mood: 'very-good',
+            score: 10,
+            note: 'Great day with friends',
+            factors: ['Social', 'Exercise']
+        },
+        {
+            date: new Date().toISOString().split('T')[0],
+            mood: 'good',
+            score: 8,
+            note: 'Feeling good today! The meditation really helped.',
+            factors: ['Sleep', 'Meditation']
+        }
+    ];
+    
+    const demoActivities = [
+        {
+            id: 1,
+            type: 'meditation',
+            activity_type: 'meditation',
+            title: 'Completed 10-minute meditation',
+            description: 'Completed 10-minute meditation session',
+            timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+            created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+            icon: 'fas fa-meditation'
+        },
+        {
+            id: 2,
+            type: 'mood',
+            activity_type: 'mood',
+            title: 'Logged mood: Good',
+            description: 'Logged daily mood entry',
+            timestamp: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
+            created_at: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(),
+            icon: 'fas fa-smile'
+        },
+        {
+            id: 3,
+            type: 'journal',
+            activity_type: 'journal',
+            title: 'Added journal entry',
+            description: 'Wrote about today\'s experiences',
+            timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+            created_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+            icon: 'fas fa-pen'
+        },
+        {
+            id: 4,
+            type: 'goal',
+            activity_type: 'goal',
+            title: 'Updated goal progress',
+            description: 'Made progress on daily meditation goal',
+            timestamp: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+            created_at: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+            icon: 'fas fa-target'
+        },
+        {
+            id: 5,
+            type: 'chat',
+            activity_type: 'chat',
+            title: 'Completed crisis support chat',
+            description: 'Had a helpful conversation with AI support',
+            timestamp: new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString(),
+            created_at: new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString(),
+            icon: 'fas fa-comments'
+        }
+    ];
+    
+    const demoGoals = [
+        {
+            id: 1,
+            title: "Daily Meditation Practice",
+            description: "Meditate for at least 10 minutes every day",
+            category: "mindfulness",
+            targetType: "daily",
+            targetValue: 30,
+            currentValue: 7,
+            unit: "days",
+            startDate: new Date().toISOString().split('T')[0],
+            endDate: new Date(Date.now() + 23 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            status: "active",
+            priority: "high",
+            reminders: true,
+            createdAt: new Date().toISOString()
+        },
+        {
+            id: 2,
+            title: "Weekly Therapy Sessions",
+            description: "Attend therapy sessions consistently",
+            category: "therapy",
+            targetType: "count",
+            targetValue: 12,
+            currentValue: 8,
+            unit: "sessions",
+            startDate: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            status: "active",
+            priority: "medium",
+            reminders: true,
+            createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString()
+        },
+        {
+            id: 3,
+            title: "Exercise 3x per week",
+            description: "Regular physical activity for mental health",
+            category: "exercise",
+            targetType: "count",
+            targetValue: 12,
+            currentValue: 4,
+            unit: "sessions",
+            startDate: new Date().toISOString().split('T')[0],
+            endDate: new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            status: "active",
+            priority: "medium",
+            reminders: true,
+            createdAt: new Date().toISOString()
+        }
+    ];
+    
+    const demoJournalEntries = [
+        {
+            id: 1,
+            title: "Reflecting on Progress",
+            content: "Today I realized how much progress I've made over the past few months. The daily meditation is really helping me stay centered and focused. I'm grateful for the small wins and the support system I've built.",
+            mood: "good",
+            tags: ["Progress", "Meditation", "Gratitude"],
+            date: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            wordCount: 42,
+            isPrivate: false,
+            createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+            lastModified: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+        },
+        {
+            id: 2,
+            title: "Managing Work Stress",
+            content: "Had a challenging day at work dealing with multiple deadlines. Feeling a bit overwhelmed but trying to use the coping strategies I've learned. Deep breathing exercises helped during the most stressful moments. Tomorrow is a new day and I'll approach it with a fresh perspective.",
+            mood: "neutral",
+            tags: ["Work", "Stress", "Coping", "Breathing"],
+            date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            wordCount: 58,
+            isPrivate: true,
+            createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+            lastModified: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+        }
+    ];
+    
+    // Store demo data in localStorage
+    localStorage.setItem('mindwell_mood_data', JSON.stringify(demoMoodData));
+    localStorage.setItem('mindwell_activities', JSON.stringify(demoActivities));
+    localStorage.setItem('mindwell_goals', JSON.stringify(demoGoals));
+    localStorage.setItem('mindwell_journal_entries', JSON.stringify(demoJournalEntries));
+    
+    // Store user data
+    localStorage.setItem('user', JSON.stringify(currentUser));
+    localStorage.setItem('isAuthenticated', 'true');
+    
+    console.log('Demo user and data created successfully');
+    
+    // Load the dashboard with demo data
+    loadDashboardData();
+    
+    showNotification('Demo mode activated! Explore the dynamic features.', 'success');
 }
 
 // Export functions to global scope
