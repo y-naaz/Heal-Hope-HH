@@ -29,6 +29,7 @@ def health_check(request):
             'chat': '/chat/',
             'users': '/users/',
             'support': '/support/',
+            'dashboard': '/dashboard/',
             'admin': '/admin/',
             'websocket': '/ws/support/<user_id>/'
         }
@@ -40,6 +41,7 @@ urlpatterns = [
     path('chat/', include('chat.urls')),
     path('users/', include('users.urls')),
     path('support/', include('support.urls')),
+    path('dashboard/', include('dashboard.urls')),
     path('api-auth/', include('rest_framework.urls')),
     path('api-token-auth/', obtain_auth_token, name='api_token_auth'),
 ]

@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'users',
     'chat',
     'support',
+    'dashboard',
 ]
 
 MIDDLEWARE = [
@@ -130,26 +131,52 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS settings
+# CORS settings - Fixed for file:// protocol and backend access
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
     "http://localhost:8080",
     "http://127.0.0.1:8080",
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True  # Only for development
+# Allow all origins for development to fix file:// protocol issues
+CORS_ALLOW_ALL_ORIGINS = True  # Enable for development with file:// protocol
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
 
-# REST Framework settings
+# Handle null origin (file:// protocol)
+CORS_ALLOW_NULL_ORIGIN = True
+
+# REST Framework settings - Fixed for cross-origin session auth
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.SessionAuthentication',
+        'dashboard.authentication.CsrfExemptSessionAuthentication',
         'rest_framework.authentication.TokenAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    # Disable CSRF for development with file:// protocol
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
 }
+
+# Disable CSRF for API endpoints during development
+CSRF_COOKIE_HTTPONLY = False  # Allow JavaScript access to CSRF token
+CSRF_USE_SESSIONS = False  # Don't require CSRF token in session for file:// protocol
 
 # Channels settings
 CHANNEL_LAYERS = {
@@ -165,6 +192,7 @@ CHANNEL_LAYERS = {
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [
     BASE_DIR / 'static',
+    BASE_DIR.parent / 'mental-health-website',  # Add the mental health website directory
 ]
 
 # Media files
@@ -176,3 +204,71 @@ ALLOWED_HOSTS = ['*']
 
 # Custom user model
 AUTH_USER_MODEL = 'users.CustomUser'
+
+# Session Configuration - Fix for logout issue
+SESSION_COOKIE_AGE = 86400  # 24 hours (24 * 60 * 60)
+SESSION_SAVE_EVERY_REQUEST = True
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'  # Allow cross-origin session cookies
+SESSION_COOKIE_NAME = 'mindwell_sessionid'
+
+# CSRF Configuration for cross-origin requests
+CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
+CSRF_COOKIE_SAMESITE = 'Lax'
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+]
+
+# Load environment variables
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# AI and Memory Configuration
+AI_SERVICE = os.getenv('AI_SERVICE', 'openai')  # 'openai' or 'gemini'
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+MEM0_API_KEY = os.getenv('MEM0_API_KEY', '')
+VECTOR_DB_TYPE = os.getenv('VECTOR_DB_TYPE', 'chroma')
+VECTOR_DB_PATH = os.getenv('VECTOR_DB_PATH', BASE_DIR / 'vector_db')
+DEFAULT_MODEL = os.getenv('DEFAULT_MODEL', 'gpt-3.5-turbo')
+EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'text-embedding-ada-002')
+DEBUG_AI = os.getenv('DEBUG_AI', 'False').lower() == 'true'
+
+# Logging configuration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'logs' / 'django.log',
+        },
+        'console': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['file', 'console'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+        'chat': {
+            'handlers': ['file', 'console'],
+            'level': 'DEBUG' if DEBUG_AI else 'INFO',
+            'propagate': True,
+        },
+    },
+}
+
+# Create logs directory if it doesn't exist
+os.makedirs(BASE_DIR / 'logs', exist_ok=True)
