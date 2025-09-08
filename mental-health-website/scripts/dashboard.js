@@ -82,6 +82,7 @@ function initializeDashboard() {
     setupCharts();
     loadUserData();
     setupCrisisChatButton(); // Add crisis chat button setup
+    setupRefreshButton(); // Add refresh button setup
 }
 
 // Check authentication with backend integration
@@ -91,6 +92,13 @@ async function checkAuthentication() {
     if (urlParams.get('demo') === 'true') {
         console.log('Demo mode activated - creating test user data');
         createDemoUser();
+        return;
+    }
+    
+    // Check for test real user mode
+    if (urlParams.get('testuser') === 'true') {
+        console.log('Test real user mode activated - creating real user simulation');
+        createTestRealUser();
         return;
     }
     
@@ -304,6 +312,20 @@ function loadTabData(tabName) {
     }
 }
 
+// Get user-specific localStorage key
+function getUserSpecificKey(baseKey) {
+    const userId = currentUser?.id || currentUser?.username || 'demo';
+    return `${baseKey}_${userId}`;
+}
+
+// Check if user is demo account
+function isDemoUser() {
+    if (!currentUser) return false;
+    return currentUser.email === 'demo@mindwell.com' || 
+           currentUser.username === 'demo' || 
+           currentUser.id === 'demo';
+}
+
 // Setup dashboard data - now using backend APIs
 async function setupDashboardData() {
     try {
@@ -320,19 +342,36 @@ async function setupDashboardData() {
 
 // Fallback to sample data if backend is unavailable
 function setupFallbackData() {
-    if (!localStorage.getItem('mindwell_mood_data')) {
-        const sampleMoodData = generateSampleMoodData();
-        localStorage.setItem('mindwell_mood_data', JSON.stringify(sampleMoodData));
-    }
+    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+    const activitiesKey = getUserSpecificKey('mindwell_activities');
     
-    if (!localStorage.getItem('mindwell_activities')) {
-        const sampleActivities = generateSampleActivities();
-        localStorage.setItem('mindwell_activities', JSON.stringify(sampleActivities));
+    // Only create sample data for demo users, real users should start with empty data
+    if (isDemoUser()) {
+        if (!localStorage.getItem(moodDataKey)) {
+            const sampleMoodData = generateSampleMoodData();
+            localStorage.setItem(moodDataKey, JSON.stringify(sampleMoodData));
+        }
+        
+        if (!localStorage.getItem(activitiesKey)) {
+            const sampleActivities = generateSampleActivities();
+            localStorage.setItem(activitiesKey, JSON.stringify(sampleActivities));
+        }
+    } else {
+        // For real users, ensure they start with empty data if no backend data
+        if (!localStorage.getItem(moodDataKey)) {
+            localStorage.setItem(moodDataKey, JSON.stringify([]));
+        }
+        
+        if (!localStorage.getItem(activitiesKey)) {
+            localStorage.setItem(activitiesKey, JSON.stringify([]));
+        }
     }
 }
 
 // Load user mood data from backend
 async function loadUserMoodData() {
+    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+    
     try {
         const response = await fetch(API_ENDPOINTS.mood.entries, {
             credentials: 'include',
@@ -344,8 +383,8 @@ async function loadUserMoodData() {
         if (response.ok) {
             const data = await response.json();
             if (data.success) {
-                localStorage.setItem('mindwell_mood_data', JSON.stringify(data.mood_entries));
-                console.log('Loaded mood data from backend:', data.mood_entries.length, 'entries');
+                localStorage.setItem(moodDataKey, JSON.stringify(data.mood_entries));
+                console.log('Loaded mood data from backend for user:', currentUser?.username, data.mood_entries.length, 'entries');
             }
         }
     } catch (error) {
@@ -355,6 +394,8 @@ async function loadUserMoodData() {
 
 // Load user activities from backend
 async function loadUserActivities() {
+    const activitiesKey = getUserSpecificKey('mindwell_activities');
+    
     try {
         const response = await fetch(API_ENDPOINTS.dashboard.activities, {
             credentials: 'include',
@@ -366,8 +407,8 @@ async function loadUserActivities() {
         if (response.ok) {
             const data = await response.json();
             if (data.success) {
-                localStorage.setItem('mindwell_activities', JSON.stringify(data.activities));
-                console.log('Loaded activities from backend:', data.activities.length, 'activities');
+                localStorage.setItem(activitiesKey, JSON.stringify(data.activities));
+                console.log('Loaded activities from backend for user:', currentUser?.username, data.activities.length, 'activities');
             }
         }
     } catch (error) {
@@ -515,8 +556,11 @@ async function loadFallbackDashboardData() {
     await loadUserMoodData();
     await loadUserActivities();
     
-    const moodData = JSON.parse(localStorage.getItem('mindwell_mood_data') || '[]');
-    const activities = JSON.parse(localStorage.getItem('mindwell_activities') || '[]');
+    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+    const activitiesKey = getUserSpecificKey('mindwell_activities');
+    
+    const moodData = JSON.parse(localStorage.getItem(moodDataKey) || '[]');
+    const activities = JSON.parse(localStorage.getItem(activitiesKey) || '[]');
     
     updateDashboardStats(moodData);
     updateRecentActivities(activities);
@@ -1066,7 +1110,8 @@ async function addToMemorySystem(category, content) {
 
 // Load mood tracker data
 function loadMoodTrackerData() {
-    const moodData = JSON.parse(localStorage.getItem('mindwell_mood_data') || '[]');
+    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+    const moodData = JSON.parse(localStorage.getItem(moodDataKey) || '[]');
     
     if (moodData.length > 0) {
         // Calculate analytics
@@ -1553,7 +1598,8 @@ function loadJournalData() {
 
 // Helper functions for local data loading
 function loadGoalsDataLocal() {
-    const goals = JSON.parse(localStorage.getItem('mindwell_goals') || '[]');
+    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
     const goalsList = document.querySelector('.goal-list');
     
     if (!goalsList) return;
@@ -1598,7 +1644,8 @@ function loadGoalsDataLocal() {
 }
 
 function loadJournalDataLocal() {
-    const entries = JSON.parse(localStorage.getItem('mindwell_journal_entries') || '[]');
+    const journalKey = getUserSpecificKey('mindwell_journal_entries');
+    const entries = JSON.parse(localStorage.getItem(journalKey) || '[]');
     const entriesList = document.querySelector('.entries-list');
     
     if (!entriesList) return;
@@ -1735,7 +1782,8 @@ async function saveJournalEntry() {
 
 // Fallback local save for journal entries
 function saveJournalEntryLocal(journalEntry) {
-    const entries = JSON.parse(localStorage.getItem('mindwell_journal_entries') || '[]');
+    const journalKey = getUserSpecificKey('mindwell_journal_entries');
+    const entries = JSON.parse(localStorage.getItem(journalKey) || '[]');
     const newEntry = {
         id: Date.now(),
         ...journalEntry,
@@ -1744,7 +1792,7 @@ function saveJournalEntryLocal(journalEntry) {
     };
     
     entries.unshift(newEntry);
-    localStorage.setItem('mindwell_journal_entries', JSON.stringify(entries));
+    localStorage.setItem(journalKey, JSON.stringify(entries));
     
     showNotification('Journal entry saved locally!', 'info');
     loadJournalData();
@@ -1973,7 +2021,8 @@ function closeGoalModal() {
 
 function saveNewGoal(form) {
     const formData = new FormData(form);
-    const goals = JSON.parse(localStorage.getItem('mindwell_goals') || '[]');
+    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
     
     const newGoal = {
         id: Date.now(),
@@ -1993,7 +2042,7 @@ function saveNewGoal(form) {
     };
     
     goals.unshift(newGoal);
-    localStorage.setItem('mindwell_goals', JSON.stringify(goals));
+    localStorage.setItem(goalsKey, JSON.stringify(goals));
     
     showNotification('Goal created successfully!', 'success');
     closeGoalModal();
@@ -2046,12 +2095,13 @@ function loadGoalsData() {
 }
 
 function updateGoalProgress(goalId, increment) {
-    const goals = JSON.parse(localStorage.getItem('mindwell_goals') || '[]');
+    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
     const goal = goals.find(g => g.id === goalId);
     
     if (goal) {
         goal.currentValue = Math.min(goal.currentValue + increment, goal.targetValue);
-        localStorage.setItem('mindwell_goals', JSON.stringify(goals));
+        localStorage.setItem(goalsKey, JSON.stringify(goals));
         
         if (goal.currentValue >= goal.targetValue) {
             showNotification(`🎉 Goal "${goal.title}" completed!`, 'success');
@@ -3346,6 +3396,37 @@ function logout() {
     window.location.href = 'index.html';
 }
 
+// Create test real user for testing refresh functionality  
+function createTestRealUser() {
+    console.log('Creating test real user for refresh testing...');
+    
+    // Set real user data (not demo mode)
+    isDemoMode = false;
+    
+    // Set real user authentication data
+    currentUser = {
+        id: 'user123',
+        username: 'yasmeen.naaz',
+        firstName: 'Yasmeen',
+        lastName: 'Naaz',
+        email: 'yasmeen.naaz@mindwell.com'
+    };
+    
+    isLoggedIn = true;
+    
+    // Set authentication data in localStorage
+    localStorage.setItem('isAuthenticated', 'true');
+    localStorage.setItem('user', JSON.stringify(currentUser));
+    localStorage.setItem('loginTime', Date.now().toString());
+    
+    updateUserProfile();
+    
+    // Load dashboard data
+    loadDashboardData();
+    
+    console.log('Test real user created and logged in');
+}
+
 // Create demo user data for testing dynamic functionality
 function createDemoUser() {
     console.log('Creating demo user data...');
@@ -3365,7 +3446,7 @@ function createDemoUser() {
     isLoggedIn = true;
     updateUserProfile();
     
-    // Create comprehensive demo data
+    // Create comprehensive demo data with user-specific keys
     const demoMoodData = [
         {
             date: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
@@ -3448,29 +3529,19 @@ function createDemoUser() {
             timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
             created_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
             icon: 'fas fa-pen'
-        },
-        {
-            id: 4,
-            type: 'goal',
-            activity_type: 'goal',
-            title: 'Updated goal progress',
-            description: 'Made progress on daily meditation goal',
-            timestamp: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
-            created_at: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
-            icon: 'fas fa-target'
-        },
-        {
-            id: 5,
-            type: 'chat',
-            activity_type: 'chat',
-            title: 'Completed crisis support chat',
-            description: 'Had a helpful conversation with AI support',
-            timestamp: new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString(),
-            created_at: new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString(),
-            icon: 'fas fa-comments'
         }
     ];
     
+    // Store demo data with user-specific keys
+    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+    const activitiesKey = getUserSpecificKey('mindwell_activities');
+    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const journalKey = getUserSpecificKey('mindwell_journal_entries');
+    
+    localStorage.setItem(moodDataKey, JSON.stringify(demoMoodData));
+    localStorage.setItem(activitiesKey, JSON.stringify(demoActivities));
+    
+    // Create demo goals
     const demoGoals = [
         {
             id: 1,
@@ -3482,89 +3553,134 @@ function createDemoUser() {
             currentValue: 7,
             unit: "days",
             startDate: new Date().toISOString().split('T')[0],
-            endDate: new Date(Date.now() + 23 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
             status: "active",
             priority: "high",
             reminders: true,
             createdAt: new Date().toISOString()
-        },
-        {
-            id: 2,
-            title: "Weekly Therapy Sessions",
-            description: "Attend therapy sessions consistently",
-            category: "therapy",
-            targetType: "count",
-            targetValue: 12,
-            currentValue: 8,
-            unit: "sessions",
-            startDate: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            status: "active",
-            priority: "medium",
-            reminders: true,
-            createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString()
-        },
-        {
-            id: 3,
-            title: "Exercise 3x per week",
-            description: "Regular physical activity for mental health",
-            category: "exercise",
-            targetType: "count",
-            targetValue: 12,
-            currentValue: 4,
-            unit: "sessions",
-            startDate: new Date().toISOString().split('T')[0],
-            endDate: new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            status: "active",
-            priority: "medium",
-            reminders: true,
-            createdAt: new Date().toISOString()
         }
     ];
+    localStorage.setItem(goalsKey, JSON.stringify(demoGoals));
     
+    // Create demo journal entries
     const demoJournalEntries = [
         {
             id: 1,
             title: "Reflecting on Progress",
-            content: "Today I realized how much progress I've made over the past few months. The daily meditation is really helping me stay centered and focused. I'm grateful for the small wins and the support system I've built.",
+            content: "Today I realized how much progress I've made over the past few months. The daily meditation is really helping me stay centered and focused. I'm grateful for the small wins.",
             mood: "good",
             tags: ["Progress", "Meditation", "Gratitude"],
             date: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            wordCount: 42,
+            wordCount: 45,
             isPrivate: false,
-            createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-            lastModified: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-        },
-        {
-            id: 2,
-            title: "Managing Work Stress",
-            content: "Had a challenging day at work dealing with multiple deadlines. Feeling a bit overwhelmed but trying to use the coping strategies I've learned. Deep breathing exercises helped during the most stressful moments. Tomorrow is a new day and I'll approach it with a fresh perspective.",
-            mood: "neutral",
-            tags: ["Work", "Stress", "Coping", "Breathing"],
-            date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            wordCount: 58,
-            isPrivate: true,
-            createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-            lastModified: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+            createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
         }
     ];
+    localStorage.setItem(journalKey, JSON.stringify(demoJournalEntries));
     
-    // Store demo data in localStorage
-    localStorage.setItem('mindwell_mood_data', JSON.stringify(demoMoodData));
-    localStorage.setItem('mindwell_activities', JSON.stringify(demoActivities));
-    localStorage.setItem('mindwell_goals', JSON.stringify(demoGoals));
-    localStorage.setItem('mindwell_journal_entries', JSON.stringify(demoJournalEntries));
+    console.log('Demo user data created successfully');
     
-    // Store user data
-    localStorage.setItem('user', JSON.stringify(currentUser));
-    localStorage.setItem('isAuthenticated', 'true');
-    
-    console.log('Demo user and data created successfully');
-    
-    // Load the dashboard with demo data
+    // Load dashboard data
     loadDashboardData();
+}
+
+// Refresh user data from backend
+async function refreshUserData() {
+    console.log('Refreshing user data from backend...');
     
-    showNotification('Demo mode activated! Explore the dynamic features.', 'success');
+    // Show loading state
+    const refreshBtn = document.getElementById('refreshBtn');
+    if (refreshBtn) {
+        refreshBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Refreshing...';
+        refreshBtn.disabled = true;
+        refreshBtn.style.opacity = '0.7';
+    }
+    
+    try {
+        // Show immediate feedback
+        showNotification('Generating new data from server...', 'info');
+        
+        // First, call the backend refresh endpoint to generate new data
+        console.log('Calling backend refresh endpoint...');
+        const refreshResponse = await fetch(`${API_BASE_URL}/dashboard/api/refresh-data/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+        
+        if (!refreshResponse.ok) {
+            throw new Error(`Refresh request failed: ${refreshResponse.status}`);
+        }
+        
+        const refreshResult = await refreshResponse.json();
+        console.log('Backend refresh result:', refreshResult);
+        
+        if (refreshResult.success) {
+            // Show intermediate success message
+            showNotification('📊 New data generated! Loading updated dashboard...', 'info');
+            
+            // Wait a moment for data to be committed
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Now refresh all user data from backend to get the new data
+            await Promise.all([
+                loadUserMoodData(),
+                loadUserActivities(),
+                loadUserMemoryProfile(),
+                loadJournalDataFromBackend(),
+                loadGoalsDataFromBackend()
+            ]);
+            
+            // Refresh dashboard if we're currently on it
+            if (currentTab === 'dashboard') {
+                await loadDashboardData();
+            }
+            
+            // Refresh current tab data
+            loadTabData(currentTab);
+            
+            // Show detailed success notification
+            const changes = refreshResult.changes || {};
+            let successMessage = '✅ Dashboard refreshed successfully! ';
+            if (changes.mood_updated) successMessage += 'New mood data generated. ';
+            if (changes.goals_updated) successMessage += 'Goal progress updated. ';
+            if (changes.data_refresh_time) successMessage += `Updated at ${changes.data_refresh_time}.`;
+            
+            showNotification(successMessage, 'success');
+            console.log('User data refreshed successfully with new data');
+        } else {
+            throw new Error(refreshResult.message || 'Backend refresh failed');
+        }
+        
+    } catch (error) {
+        console.error('Error refreshing user data:', error);
+        showNotification('❌ Failed to refresh data. Please try again.', 'error');
+    } finally {
+        // Reset button state with slight delay
+        setTimeout(() => {
+            if (refreshBtn) {
+                refreshBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Data';
+                refreshBtn.disabled = false;
+                refreshBtn.style.opacity = '1';
+            }
+        }, 500);
+    }
+}
+
+// Show refresh button for real users only
+function setupRefreshButton() {
+    const refreshBtn = document.getElementById('refreshBtn');
+    if (!refreshBtn) return;
+    
+    // Show refresh button only for real users (not demo mode or demo users)
+    if (!isDemoMode && !isDemoUser() && isLoggedIn) {
+        refreshBtn.style.display = 'inline-flex';
+        console.log('Refresh button shown for real user');
+    } else {
+        refreshBtn.style.display = 'none';
+        console.log('Refresh button hidden for demo user/mode');
+    }
 }
 
 // Export functions to global scope
@@ -3587,4 +3703,5 @@ window.closeEmergencyContacts = closeEmergencyContacts;
 window.closeGoalModal = closeGoalModal;
 window.closeAppointmentModal = closeAppointmentModal;
 window.sendChatMessage = sendChatMessage;
+window.refreshUserData = refreshUserData;
 window.logout = logout;

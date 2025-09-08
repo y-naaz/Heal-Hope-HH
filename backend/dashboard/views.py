@@ -472,6 +472,13 @@ def dashboard_overview(request):
     today_mood_entry = MoodEntry.objects.filter(user=user, date=today).first()
     today_mood = today_mood_entry.mood if today_mood_entry else None
     
+    # Calculate mood change from yesterday
+    yesterday = today - timedelta(days=1)
+    yesterday_mood = MoodEntry.objects.filter(user=user, date=yesterday).first()
+    mood_change = 0
+    if today_mood_entry and yesterday_mood:
+        mood_change = ((today_mood_entry.score - yesterday_mood.score) / yesterday_mood.score) * 100
+    
     # Meditation streak
     meditation_sessions = MeditationSession.objects.filter(user=user, completed=True).order_by('-created_at')
     meditation_streak = 0
@@ -566,16 +573,30 @@ def dashboard_overview(request):
     dashboard_data = {
         'success': True,
         'dashboard_stats': {
-            'today_mood': today_mood,
+            'todays_mood': {
+                'mood': today_mood,
+                'change': round(mood_change, 1) if mood_change != 0 else None
+            },
             'meditation_streak': meditation_streak,
+            'meditation_streak_text': 'Personal best!' if meditation_streak > 0 else 'Start your journey!',
             'goals_completed': goals_completed,
             'goals_active': goals_active,
             'journal_entries_count': journal_entries_count,
-            'next_appointment': next_appointment_data,
-            'weekly_goals_progress': round(weekly_progress, 1)
+            'next_session': {
+                'time': 'Tomorrow' if next_appointment_data else 'No sessions scheduled',
+                'details': f"{next_appointment_data['time']} with {next_appointment_data['therapist_name']}" if next_appointment_data else 'Schedule your first session'
+            },
+            'weekly_goals': {
+                'progress': f"{goals_completed}/{goals_active + goals_completed}" if (goals_active + goals_completed) > 0 else "0/0",
+                'status': 'On track' if weekly_progress > 50 else 'Getting started' if goals_active > 0 else 'No goals set',
+                'on_track': weekly_progress > 50
+            }
         },
         'recent_activities': activities_data,
-        'mood_chart_data': mood_chart_data,
+        'mood_chart_data': {
+            'labels': [entry['day'] for entry in mood_chart_data if entry['score'] is not None],
+            'scores': [entry['score'] for entry in mood_chart_data if entry['score'] is not None]
+        },
         'insights': insights
     }
     
@@ -931,3 +952,91 @@ def create_goal(request):
         'success': False,
         'errors': serializer.errors
     }, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([AllowAny])  # Temporary for development
+def refresh_dashboard_data(request):
+    """Refresh dashboard data by clearing/resetting all user data to zero"""
+    
+    # Handle anonymous users for development
+    if not request.user.is_authenticated:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        try:
+            user = User.objects.get(username='yasmeen')
+        except User.DoesNotExist:
+            user = User.objects.first()
+        if not user:
+            return Response({'error': 'No users found'}, status=404)
+    else:
+        user = request.user
+    
+    try:
+        # Clear all user data
+        deleted_counts = {}
+        
+        # Delete all mood entries
+        mood_count = MoodEntry.objects.filter(user=user).count()
+        MoodEntry.objects.filter(user=user).delete()
+        deleted_counts['mood_entries'] = mood_count
+        
+        # Delete all activities
+        activity_count = Activity.objects.filter(user=user).count()
+        Activity.objects.filter(user=user).delete()
+        deleted_counts['activities'] = activity_count
+        
+        # Reset all goals to zero progress
+        goals = Goal.objects.filter(user=user)
+        goal_count = goals.count()
+        for goal in goals:
+            goal.current_value = 0
+            goal.status = 'active'
+            goal.save()
+        deleted_counts['goals_reset'] = goal_count
+        
+        # Delete all journal entries
+        journal_count = JournalEntry.objects.filter(user=user).count()
+        JournalEntry.objects.filter(user=user).delete()
+        deleted_counts['journal_entries'] = journal_count
+        
+        # Delete all meditation sessions
+        meditation_count = MeditationSession.objects.filter(user=user).count()
+        MeditationSession.objects.filter(user=user).delete()
+        deleted_counts['meditation_sessions'] = meditation_count
+        
+        # Delete all appointments
+        appointment_count = Appointment.objects.filter(user=user).count()
+        Appointment.objects.filter(user=user).delete()
+        deleted_counts['appointments'] = appointment_count
+        
+        # Create a single activity to show refresh happened
+        Activity.objects.create(
+            user=user,
+            activity_type='other',
+            title="🔄 Dashboard Reset",
+            description=f"All user data cleared and reset to zero at {timezone.now().strftime('%H:%M:%S')}",
+            metadata={
+                'refresh_time': timezone.now().isoformat(),
+                'reset_type': 'full_data_clear',
+                'deleted_counts': deleted_counts
+            }
+        )
+        
+        return Response({
+            'success': True,
+            'message': 'All user data has been reset to zero!',
+            'timestamp': timezone.now().isoformat(),
+            'changes': {
+                'data_cleared': True,
+                'reset_type': 'full_reset',
+                'data_refresh_time': timezone.now().strftime('%H:%M:%S'),
+                'deleted_counts': deleted_counts
+            }
+        })
+        
+    except Exception as e:
+        return Response({
+            'success': False,
+            'error': str(e),
+            'message': 'Failed to reset dashboard data'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -1,11 +1,14 @@
 // Modern Interactive JavaScript for Mindwell
 class MindwellApp {
     constructor() {
+        this.isRealMode = false; // Start in demo mode
+        this.user = null;
         this.init();
     }
 
     init() {
         this.setupLoadingScreen();
+        this.setupUserModeToggle();
         this.setupScrollAnimations();
         this.setupParticles();
         this.setupHeader();
@@ -14,6 +17,170 @@ class MindwellApp {
         this.setupModals();
         this.setupInteractiveElements();
         this.setupPerformanceOptimizations();
+        this.initializeUserMode();
+    }
+
+    // User Mode Toggle System
+    setupUserModeToggle() {
+        // Check if user is logged in with demo account
+        const isDemoAccount = localStorage.getItem('isDemoAccount') === 'true';
+        const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+        const savedMode = localStorage.getItem('userMode');
+        
+        // If user is logged in with demo account, they should be in demo mode
+        if (isDemoAccount && isAuthenticated) {
+            this.isRealMode = false;
+            localStorage.setItem('userMode', 'demo');
+        } else if (savedMode === 'real' && isAuthenticated && !isDemoAccount) {
+            this.isRealMode = true;
+        } else {
+            this.isRealMode = false;
+            localStorage.setItem('userMode', 'demo');
+        }
+
+        // Update toggle UI
+        this.updateToggleUI();
+        this.updateNavigationUI();
+
+        // Add event listener for toggle
+        const toggleInput = document.getElementById('userModeToggle');
+        if (toggleInput) {
+            toggleInput.checked = this.isRealMode;
+            toggleInput.addEventListener('change', this.handleModeToggle.bind(this));
+        }
+    }
+
+    handleModeToggle(event) {
+        const isChecked = event.target.checked;
+        
+        if (isChecked) {
+            // Switching to real mode - check if user is authenticated
+            const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+            
+            if (isAuthenticated) {
+                this.switchToRealMode();
+            } else {
+                // Show login modal
+                event.target.checked = false; // Reset toggle
+                this.showLoginPrompt();
+            }
+        } else {
+            // Switching to demo mode
+            this.switchToDemoMode();
+        }
+    }
+
+    switchToRealMode() {
+        this.isRealMode = true;
+        localStorage.setItem('userMode', 'real');
+        this.updateNavigationUI();
+        
+        // Load user data
+        const userData = localStorage.getItem('user');
+        if (userData) {
+            this.user = JSON.parse(userData);
+        }
+        
+        createNotification('Switched to Real User Mode', 'success');
+        trackEvent('Mode Switch', { mode: 'real' });
+    }
+
+    switchToDemoMode() {
+        this.isRealMode = false;
+        localStorage.setItem('userMode', 'demo');
+        this.updateNavigationUI();
+        
+        createNotification('Switched to Demo Mode - Explore our features!', 'info');
+        trackEvent('Mode Switch', { mode: 'demo' });
+    }
+
+    showLoginPrompt() {
+        const promptModal = `
+            <div id="loginPromptModal" class="modal active">
+                <div class="modal-content" style="max-width: 500px;">
+                    <div class="modal-header">
+                        <h2><i class="fas fa-user-lock"></i> Authentication Required</h2>
+                        <span class="close" onclick="closeModal('loginPromptModal')">&times;</span>
+                    </div>
+                    <div class="prompt-content">
+                        <div class="prompt-icon">
+                            <i class="fas fa-lock"></i>
+                        </div>
+                        <h3>Access Real User Mode</h3>
+                        <p>To access real user mode with your personal data and settings, please log in to your account.</p>
+                        
+                        <div class="prompt-actions">
+                            <button class="btn btn-primary" onclick="closeModal('loginPromptModal'); showLogin();">
+                                <i class="fas fa-sign-in-alt"></i> Login to Account
+                            </button>
+                            <button class="btn btn-outline" onclick="closeModal('loginPromptModal'); showSignup();">
+                                <i class="fas fa-user-plus"></i> Create Account
+                            </button>
+                            <button class="btn btn-outline btn-small" onclick="closeModal('loginPromptModal');">
+                                <i class="fas fa-times"></i> Stay in Demo Mode
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.body.insertAdjacentHTML('beforeend', promptModal);
+        document.body.style.overflow = 'hidden';
+    }
+
+    updateToggleUI() {
+        const toggleInput = document.getElementById('userModeToggle');
+        if (toggleInput) {
+            toggleInput.checked = this.isRealMode;
+        }
+    }
+
+    updateNavigationUI() {
+        const authButtons = document.getElementById('authButtons');
+        const userInfo = document.getElementById('userInfo');
+        const demoIndicator = document.getElementById('demoIndicator');
+
+        if (this.isRealMode) {
+            // Real mode - check if user is authenticated
+            const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+            
+            if (isAuthenticated) {
+                // Show user info
+                const userData = localStorage.getItem('user');
+                if (userData) {
+                    const user = JSON.parse(userData);
+                    this.showUserInfo(user);
+                }
+                if (authButtons) authButtons.style.display = 'none';
+                if (demoIndicator) demoIndicator.style.display = 'none';
+            } else {
+                // Show auth buttons
+                if (authButtons) authButtons.style.display = 'flex';
+                if (userInfo) userInfo.style.display = 'none';
+                if (demoIndicator) demoIndicator.style.display = 'none';
+            }
+        } else {
+            // Demo mode - show demo indicator
+            if (demoIndicator) demoIndicator.style.display = 'flex';
+            if (authButtons) authButtons.style.display = 'none';
+            if (userInfo) userInfo.style.display = 'none';
+        }
+    }
+
+    showUserInfo(user) {
+        const userInfo = document.getElementById('userInfo');
+        const userName = document.getElementById('userName');
+        
+        if (userInfo && userName) {
+            userName.textContent = user.first_name || user.full_name || 'User';
+            userInfo.style.display = 'flex';
+        }
+    }
+
+    initializeUserMode() {
+        // Check authentication status and update UI accordingly
+        this.checkAuthStatus();
     }
 
     // Loading Screen Animation - Fixed
@@ -402,10 +569,25 @@ class MindwellApp {
             if (result.success) {
                 createNotification('Login successful! Redirecting to dashboard...', 'success');
                 
+                // Check if this is the demo user account
+                const isDemoAccount = data.email === 'demo@mindwell.com' || 
+                                    result.user.email === 'demo@mindwell.com' ||
+                                    result.user.username === 'demo';
+                
                 // Store user data with login timestamp
                 localStorage.setItem('user', JSON.stringify(result.user));
                 localStorage.setItem('isAuthenticated', 'true');
                 localStorage.setItem('loginTime', Date.now().toString());
+                
+                // Set user mode based on whether it's demo account
+                if (isDemoAccount) {
+                    localStorage.setItem('userMode', 'demo');
+                    localStorage.setItem('isDemoAccount', 'true');
+                    createNotification('Logged in as demo user - you\'re in demo mode!', 'info');
+                } else {
+                    localStorage.setItem('userMode', 'real');
+                    localStorage.setItem('isDemoAccount', 'false');
+                }
                 
                 // Close modal and redirect
                 this.closeModal(document.getElementById('loginModal'));
@@ -2910,8 +3092,21 @@ async function logout() {
     }
 }
 
-// Make logout function globally available
+// Make functions globally available
 window.logout = logout;
+window.showDashboard = () => {
+    window.location.href = 'dashboard.html';
+};
+window.toggleUserMode = function() {
+    const app = window.mindwellApp;
+    if (app && app.handleModeToggle) {
+        const toggle = document.getElementById('userModeToggle');
+        app.handleModeToggle({ target: toggle });
+    }
+};
+
+// Store app instance globally for external access
+window.mindwellApp = null;
 
 // Export for potential module use
 if (typeof module !== 'undefined' && module.exports) {

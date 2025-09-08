@@ -35,4 +35,7 @@ urlpatterns = [
     # Goals endpoints (alternative to viewset)
     path('api/goals/', views.goals_list, name='goals-list'),
     path('api/goals/create/', views.create_goal, name='create-goal'),
+    
+    # Refresh endpoint
+    path('api/refresh-data/', views.refresh_dashboard_data, name='refresh-data'),
 ]

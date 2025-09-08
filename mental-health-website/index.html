@@ -61,9 +61,49 @@
                 <a href="#blog" class="nav-link">Blog</a>
                 <a href="#contact" class="nav-link">Contact</a>
             </nav>
-            <div class="auth-buttons">
-                <button class="btn btn-outline" onclick="showLogin()">Login</button>
-                <button class="btn btn-primary" onclick="showSignup()">Sign Up</button>
+            <div class="nav-controls">
+                <!-- User Mode Toggle -->
+                <div class="mode-toggle">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="userModeToggle" onchange="toggleUserMode()">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-text">
+                            <span class="demo-text">Demo</span>
+                            <span class="real-text">Real</span>
+                        </span>
+                    </label>
+                </div>
+                <!-- Auth Buttons (shown in real mode) -->
+                <div id="authButtons" class="auth-buttons" style="display: none;">
+                    <button class="btn btn-outline" onclick="showLogin()">Login</button>
+                    <button class="btn btn-primary" onclick="showSignup()">Sign Up</button>
+                </div>
+                <!-- User Info (shown when logged in) -->
+                <div id="userInfo" class="user-info" style="display: none;">
+                    <div class="user-avatar">
+                        <i class="fas fa-user"></i>
+                    </div>
+                    <span id="userName">User</span>
+                    <div class="user-dropdown">
+                        <button class="btn btn-outline btn-small" onclick="showDashboard()">
+                            <i class="fas fa-chart-line"></i>
+                            Dashboard
+                        </button>
+                        <button class="btn btn-outline btn-small" onclick="logout()">
+                            <i class="fas fa-sign-out-alt"></i>
+                            Logout
+                        </button>
+                    </div>
+                </div>
+                <!-- Demo Mode Indicator -->
+                <div id="demoIndicator" class="demo-indicator">
+                    <i class="fas fa-flask"></i>
+                    <span>Demo Mode</span>
+                    <button class="btn btn-primary btn-small" onclick="showDashboard()">
+                        <i class="fas fa-chart-line"></i>
+                        Try Dashboard
+                    </button>
+                </div>
             </div>
         </div>
     </header>
