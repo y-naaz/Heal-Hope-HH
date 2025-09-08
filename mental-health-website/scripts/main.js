@@ -7,6 +7,9 @@ class MindwellApp {
     }
 
     init() {
+        // Auto-authenticate and redirect to dashboard
+        this.autoAuthenticate();
+        
         this.setupLoadingScreen();
         this.setupUserModeToggle();
         this.setupScrollAnimations();
@@ -18,6 +21,34 @@ class MindwellApp {
         this.setupInteractiveElements();
         this.setupPerformanceOptimizations();
         this.initializeUserMode();
+    }
+
+    // Auto-authenticate users and redirect to dashboard
+    autoAuthenticate() {
+        // Set user as authenticated with default user data
+        const defaultUser = {
+            id: 1,
+            first_name: 'Guest',
+            last_name: 'User',
+            full_name: 'Guest User',
+            email: 'guest@mindwell.com',
+            username: 'guest'
+        };
+
+        // Store authentication data
+        localStorage.setItem('user', JSON.stringify(defaultUser));
+        localStorage.setItem('isAuthenticated', 'true');
+        localStorage.setItem('loginTime', Date.now().toString());
+        localStorage.setItem('userMode', 'demo');
+        localStorage.setItem('isDemoAccount', 'true');
+
+        // Show notification and redirect to dashboard
+        setTimeout(() => {
+            createNotification('Welcome! Redirecting to your dashboard...', 'success');
+            setTimeout(() => {
+                window.location.href = 'dashboard.html';
+            }, 1500);
+        }, 2000); // Wait for loading screen to complete
     }
 
     // User Mode Toggle System
