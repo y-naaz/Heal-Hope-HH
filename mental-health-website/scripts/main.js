@@ -610,50 +610,11 @@ class MindwellApp {
         }
     }
 
-    // Quick login with hardcoded credentials  
+    // Quick login function - now requires manual credential entry
     async quickLogin() {
-        try {
-            const response = await fetch('http://localhost:8000/users/auth/login/', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    email: 'yasmeennaazogo@gmail.com',
-                    password: 'Naaz@951'
-                })
-            });
-
-            const result = await response.json();
-
-            if (result.success) {
-                createNotification('Login successful! Redirecting to dashboard...', 'success');
-                
-                // Store user data with login timestamp
-                localStorage.setItem('user', JSON.stringify(result.user));
-                localStorage.setItem('isAuthenticated', 'true');
-                localStorage.setItem('loginTime', Date.now().toString());
-                localStorage.setItem('userMode', 'real');
-                localStorage.setItem('isDemoAccount', 'false');
-                
-                // Close any open modals
-                const activeModal = document.querySelector('.modal.active');
-                if (activeModal) {
-                    this.closeModal(activeModal);
-                }
-                
-                setTimeout(() => {
-                    window.location.href = 'dashboard.html';
-                }, 1000);
-                
-            } else {
-                createNotification(result.message || 'Login failed. Please try again.', 'error');
-            }
-
-        } catch (error) {
-            console.error('Login error:', error);
-            createNotification('Network error. Please check your connection.', 'error');
-        }
+        // Show login modal instead of using hardcoded credentials
+        this.showLoginPrompt();
+        createNotification('Please enter your credentials to log in.', 'info');
     }
 
     // Handle signup form submission
