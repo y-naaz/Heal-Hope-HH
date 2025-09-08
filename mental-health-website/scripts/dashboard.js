@@ -135,6 +135,12 @@ async function checkAuthentication() {
 
 // Separate function to verify with backend without blocking the UI
 async function verifyAuthWithBackend() {
+    // Skip backend verification for demo mode and demo users
+    if (isDemoMode || isDemoUser()) {
+        console.log('Skipping backend auth verification for demo user/mode');
+        return;
+    }
+    
     try {
         console.log('Verifying authentication with backend...');
         const response = await fetch('http://localhost:8000/users/auth/status/', {
@@ -3444,6 +3450,12 @@ function createDemoUser() {
     };
     
     isLoggedIn = true;
+    
+    // Set demo authentication data in localStorage to prevent logout loop
+    localStorage.setItem('isAuthenticated', 'true');
+    localStorage.setItem('user', JSON.stringify(currentUser));
+    localStorage.setItem('loginTime', Date.now().toString());
+    
     updateUserProfile();
     
     // Create comprehensive demo data with user-specific keys
