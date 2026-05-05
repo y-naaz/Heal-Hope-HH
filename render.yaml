@@ -7,7 +7,6 @@ services:
     buildCommand: ./build.sh
     startCommand: daphne -b 0.0.0.0 -p $PORT mental_health_backend.asgi:application
     plan: free
-    ipAllowList: []        # empty = allow all traffic (public API)
     envVars:
       - key: SECRET_KEY
         generateValue: true          # Render auto-generates a secure random value
@@ -39,7 +38,6 @@ services:
   - type: redis
     name: healhope-redis
     plan: free
-    ipAllowList: []        # empty = allow all traffic
     maxmemoryPolicy: allkeys-lru
 
 databases:
