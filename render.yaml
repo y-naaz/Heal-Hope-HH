@@ -1,0 +1,48 @@
+services:
+  # ── Django Backend ─────────────────────────────────────────────────────────
+  - type: web
+    name: healhope-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: ./build.sh
+    startCommand: daphne -b 0.0.0.0 -p $PORT mental_health_backend.asgi:application
+    plan: free
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true          # Render auto-generates a secure random value
+      - key: DEBUG
+        value: "False"
+      - key: ALLOWED_HOSTS
+        value: healhope-backend.onrender.com
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://healhope.vercel.app
+      - key: DATABASE_URL
+        fromDatabase:
+          name: healhope-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: healhope-redis
+          type: redis
+          property: connectionString
+      - key: GOOGLE_API_KEY
+        sync: false                  # You set this manually in Render dashboard
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: MEM0_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+
+  # ── Redis (for WebSocket channel layer) ────────────────────────────────────
+  - type: redis
+    name: healhope-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+
+databases:
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  - name: healhope-db
+    plan: free
+    databaseName: healhope
+    user: healhope

@@ -1,4 +1,4 @@
-// Dashboard JavaScript for MindWell Mental Health Website
+// Dashboard JavaScript for Heal Hope Mental Health Website
 
 // Global variables
 let currentUser = null;
@@ -10,9 +10,22 @@ let breathingCycle = 'inhale';
 let breathingTimer = null;
 let isDemoMode = false; // Flag to track if we're in demo mode
 
-// API Configuration
-const API_BASE_URL = 'http://localhost:8000';
-const CHAT_WS_URL = 'ws://localhost:8000';
+// ─── API Configuration ────────────────────────────────────────────────────────
+// Pick the backend origin from a <meta> tag if present so the same HTML file
+// works in both local development and production without code changes.
+//
+// In production, add this inside your HTML <head>:
+//   <meta name="api-base-url" content="https://api.yourdomain.com">
+//   <meta name="ws-base-url"  content="wss://api.yourdomain.com">
+//
+// For local dev (no meta tag) it defaults to http://localhost:8000.
+const _metaApiUrl = document.querySelector('meta[name="api-base-url"]');
+const _metaWsUrl  = document.querySelector('meta[name="ws-base-url"]');
+
+const API_BASE_URL  = (_metaApiUrl && _metaApiUrl.content) ? _metaApiUrl.content.replace(/\/$/, '') : 'http://localhost:8000';
+const CHAT_WS_URL   = (_metaWsUrl  && _metaWsUrl.content)  ? _metaWsUrl.content.replace(/\/$/, '')  : 'ws://localhost:8000';
+const SUPPORT_AVATAR_URL = 'https://randomuser.me/api/portraits/women/68.jpg?v=20260505';
+const SUPPORT_AVATAR_FALLBACK_URL = 'https://i.pravatar.cc/120?img=47';
 
 // API Endpoints
 const API_ENDPOINTS = {
@@ -85,6 +98,10 @@ function initializeDashboard() {
     setupRefreshButton(); // Add refresh button setup
 }
 
+function getSupportAvatarMarkup() {
+    return `<img src="${SUPPORT_AVATAR_URL}" alt="Support guide" class="avatar-photo" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='${SUPPORT_AVATAR_FALLBACK_URL}';">`;
+}
+
 // Check authentication with backend integration
 async function checkAuthentication() {
     // Check for demo mode (for testing dynamic functionality)
@@ -108,7 +125,8 @@ async function checkAuthentication() {
     
     if (!isAuthenticated || !userData) {
         console.log('No authentication data found in localStorage');
-        redirectToLogin();
+        showNotification('Opening dashboard in demo mode', 'info');
+        createDemoUser();
         return;
     }
     
@@ -125,7 +143,8 @@ async function checkAuthentication() {
         console.error('Failed to parse user data:', parseError);
         localStorage.removeItem('user');
         localStorage.removeItem('isAuthenticated');
-        redirectToLogin();
+        showNotification('Session data was invalid, using demo mode', 'info');
+        createDemoUser();
         return;
     }
     
@@ -327,7 +346,7 @@ function getUserSpecificKey(baseKey) {
 // Check if user is demo account
 function isDemoUser() {
     if (!currentUser) return false;
-    return currentUser.email === 'demo@mindwell.com' || 
+    return currentUser.email === 'demo@healhope.com' || 
            currentUser.username === 'demo' || 
            currentUser.id === 'demo';
 }
@@ -348,8 +367,8 @@ async function setupDashboardData() {
 
 // Fallback to sample data if backend is unavailable
 function setupFallbackData() {
-    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
-    const activitiesKey = getUserSpecificKey('mindwell_activities');
+    const moodDataKey = getUserSpecificKey('healhope_mood_data');
+    const activitiesKey = getUserSpecificKey('healhope_activities');
     
     // Only create sample data for demo users, real users should start with empty data
     if (isDemoUser()) {
@@ -376,7 +395,7 @@ function setupFallbackData() {
 
 // Load user mood data from backend
 async function loadUserMoodData() {
-    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+    const moodDataKey = getUserSpecificKey('healhope_mood_data');
     
     try {
         const response = await fetch(API_ENDPOINTS.mood.entries, {
@@ -400,7 +419,7 @@ async function loadUserMoodData() {
 
 // Load user activities from backend
 async function loadUserActivities() {
-    const activitiesKey = getUserSpecificKey('mindwell_activities');
+    const activitiesKey = getUserSpecificKey('healhope_activities');
     
     try {
         const response = await fetch(API_ENDPOINTS.dashboard.activities, {
@@ -437,7 +456,7 @@ async function loadUserMemoryProfile() {
             if (data.success) {
                 console.log('User memory profile loaded:', data.profile);
                 // Store memory profile for personalization
-                localStorage.setItem('mindwell_memory_profile', JSON.stringify(data.profile));
+                localStorage.setItem('healhope_memory_profile', JSON.stringify(data.profile));
             }
         }
     } catch (error) {
@@ -562,8 +581,8 @@ async function loadFallbackDashboardData() {
     await loadUserMoodData();
     await loadUserActivities();
     
-    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
-    const activitiesKey = getUserSpecificKey('mindwell_activities');
+    const moodDataKey = getUserSpecificKey('healhope_mood_data');
+    const activitiesKey = getUserSpecificKey('healhope_activities');
     
     const moodData = JSON.parse(localStorage.getItem(moodDataKey) || '[]');
     const activities = JSON.parse(localStorage.getItem(activitiesKey) || '[]');
@@ -717,12 +736,12 @@ function createMoodChartFromBackend(moodChartData) {
             datasets: [{
                 label: 'Mood Score',
                 data: scores,
-                borderColor: '#6366f1',
-                backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                borderColor: '#44556b',
+                backgroundColor: 'rgba(68, 85, 107, 0.12)',
                 borderWidth: 3,
                 fill: true,
                 tension: 0.4,
-                pointBackgroundColor: '#6366f1',
+                pointBackgroundColor: '#44556b',
                 pointBorderColor: '#ffffff',
                 pointBorderWidth: 2,
                 pointRadius: 6,
@@ -959,12 +978,12 @@ function createMoodChart(moodData) {
             datasets: [{
                 label: 'Mood Score',
                 data: scores,
-                borderColor: '#6366f1',
-                backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                borderColor: '#44556b',
+                backgroundColor: 'rgba(68, 85, 107, 0.12)',
                 borderWidth: 3,
                 fill: true,
                 tension: 0.4,
-                pointBackgroundColor: '#6366f1',
+                pointBackgroundColor: '#44556b',
                 pointBorderColor: '#ffffff',
                 pointBorderWidth: 2,
                 pointRadius: 6
@@ -1116,7 +1135,7 @@ async function addToMemorySystem(category, content) {
 
 // Load mood tracker data
 function loadMoodTrackerData() {
-    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+    const moodDataKey = getUserSpecificKey('healhope_mood_data');
     const moodData = JSON.parse(localStorage.getItem(moodDataKey) || '[]');
     
     if (moodData.length > 0) {
@@ -1297,7 +1316,7 @@ function startMeditation() {
         
         // Add to activities
         setTimeout(() => {
-            const activities = JSON.parse(localStorage.getItem('mindwell_activities') || '[]');
+            const activities = JSON.parse(localStorage.getItem('healhope_activities') || '[]');
             activities.unshift({
                 id: Date.now(),
                 type: 'meditation',
@@ -1305,7 +1324,7 @@ function startMeditation() {
                 timestamp: new Date().toISOString(),
                 icon: 'fas fa-meditation'
             });
-            localStorage.setItem('mindwell_activities', JSON.stringify(activities.slice(0, 10)));
+            localStorage.setItem('healhope_activities', JSON.stringify(activities.slice(0, 10)));
         }, 10000); // Add after 10 seconds for demo
         
     } else {
@@ -1348,7 +1367,7 @@ function setupCharts() {
 // Load user data
 function loadUserData() {
     // Load user-specific data and preferences
-    const userPreferences = JSON.parse(localStorage.getItem(`mindwell_preferences_${currentUser?.id}`) || '{}');
+    const userPreferences = JSON.parse(localStorage.getItem(`healhope_preferences_${currentUser?.id}`) || '{}');
     
     // Apply preferences if any
     if (userPreferences.theme) {
@@ -1393,7 +1412,7 @@ function showNotification(message, type = 'info') {
         position: fixed;
         top: 20px;
         right: 20px;
-        background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#6366f1'};
+        background: ${type === 'success' ? '#6f8b77' : type === 'error' ? '#9f5e5e' : '#44556b'};
         color: white;
         padding: 1rem 1.5rem;
         border-radius: 0.5rem;
@@ -1420,7 +1439,7 @@ function loadMeditationData() {
     // Skip backend calls in demo mode or if not authenticated
     if (isDemoMode || !isLoggedIn) {
         console.log('Loading meditation data in demo/offline mode');
-        const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
+        const meditationStats = JSON.parse(localStorage.getItem('healhope_meditation_stats') || '{}');
         updateMeditationStats(meditationStats);
         return;
     }
@@ -1442,18 +1461,18 @@ function loadMeditationData() {
     })
     .then(data => {
         if (data && data.success) {
-            localStorage.setItem('mindwell_meditation_stats', JSON.stringify(data.stats));
+            localStorage.setItem('healhope_meditation_stats', JSON.stringify(data.stats));
             updateMeditationStats(data.stats);
         } else {
             // Fallback to local data
-            const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
+            const meditationStats = JSON.parse(localStorage.getItem('healhope_meditation_stats') || '{}');
             updateMeditationStats(meditationStats);
         }
     })
     .catch(error => {
         console.error('Error loading meditation data:', error);
         // Fallback to local data without redirecting
-        const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
+        const meditationStats = JSON.parse(localStorage.getItem('healhope_meditation_stats') || '{}');
         updateMeditationStats(meditationStats);
     });
 }
@@ -1462,7 +1481,7 @@ function loadAppointmentsData() {
     // Skip backend calls in demo mode or if not authenticated
     if (isDemoMode || !isLoggedIn) {
         console.log('Loading appointments data in demo/offline mode');
-        const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
+        const appointments = JSON.parse(localStorage.getItem('healhope_appointments') || '[]');
         updateAppointmentsList(appointments);
         return;
     }
@@ -1483,16 +1502,16 @@ function loadAppointmentsData() {
     })
     .then(data => {
         if (data && data.success) {
-            localStorage.setItem('mindwell_appointments', JSON.stringify(data.appointments));
+            localStorage.setItem('healhope_appointments', JSON.stringify(data.appointments));
             updateAppointmentsList(data.appointments);
         } else {
-            const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
+            const appointments = JSON.parse(localStorage.getItem('healhope_appointments') || '[]');
             updateAppointmentsList(appointments);
         }
     })
     .catch(error => {
         console.error('Error loading appointments:', error);
-        const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
+        const appointments = JSON.parse(localStorage.getItem('healhope_appointments') || '[]');
         updateAppointmentsList(appointments);
     });
 }
@@ -1501,13 +1520,13 @@ function loadCommunityData() {
     // Skip backend calls in demo mode or if not authenticated  
     if (isDemoMode || !isLoggedIn) {
         console.log('Loading community data in demo/offline mode');
-        const posts = JSON.parse(localStorage.getItem('mindwell_community_posts') || '[]');
+        const posts = JSON.parse(localStorage.getItem('healhope_community_posts') || '[]');
         updateCommunityFeed(posts);
         return;
     }
     
     // Community data is typically local for now, but add error handling for future backend integration
-    const posts = JSON.parse(localStorage.getItem('mindwell_community_posts') || '[]');
+    const posts = JSON.parse(localStorage.getItem('healhope_community_posts') || '[]');
     updateCommunityFeed(posts);
 }
 
@@ -1515,13 +1534,13 @@ function loadResourcesData() {
     // Skip backend calls in demo mode or if not authenticated
     if (isDemoMode || !isLoggedIn) {
         console.log('Loading resources data in demo/offline mode');
-        const resources = JSON.parse(localStorage.getItem('mindwell_resources') || '[]');
+        const resources = JSON.parse(localStorage.getItem('healhope_resources') || '[]');
         updateResourcesGrid(resources);
         return;
     }
     
     // Resources are typically local for now, but add error handling for future backend integration
-    const resources = JSON.parse(localStorage.getItem('mindwell_resources') || '[]');
+    const resources = JSON.parse(localStorage.getItem('healhope_resources') || '[]');
     updateResourcesGrid(resources);
 }
 
@@ -1529,7 +1548,7 @@ function loadGoalsData() {
     // Skip backend calls in demo mode or if not authenticated
     if (isDemoMode || !isLoggedIn) {
         console.log('Loading goals data in demo/offline mode');
-        const goals = JSON.parse(localStorage.getItem('mindwell_goals') || '[]');
+        const goals = JSON.parse(localStorage.getItem('healhope_goals') || '[]');
         const goalsList = document.querySelector('.goal-list');
         if (goalsList) {
             // Use existing loadGoalsData logic but with local data
@@ -1554,7 +1573,7 @@ function loadGoalsData() {
     })
     .then(data => {
         if (data && data.success) {
-            localStorage.setItem('mindwell_goals', JSON.stringify(data.goals));
+            localStorage.setItem('healhope_goals', JSON.stringify(data.goals));
             loadGoalsDataLocal();
         } else {
             loadGoalsDataLocal();
@@ -1590,7 +1609,7 @@ function loadJournalData() {
     })
     .then(data => {
         if (data && data.success) {
-            localStorage.setItem('mindwell_journal_entries', JSON.stringify(data.entries));
+            localStorage.setItem('healhope_journal_entries', JSON.stringify(data.entries));
             loadJournalDataLocal();
         } else {
             loadJournalDataLocal();
@@ -1604,7 +1623,7 @@ function loadJournalData() {
 
 // Helper functions for local data loading
 function loadGoalsDataLocal() {
-    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goalsKey = getUserSpecificKey('healhope_goals');
     const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
     const goalsList = document.querySelector('.goal-list');
     
@@ -1650,7 +1669,7 @@ function loadGoalsDataLocal() {
 }
 
 function loadJournalDataLocal() {
-    const journalKey = getUserSpecificKey('mindwell_journal_entries');
+    const journalKey = getUserSpecificKey('healhope_journal_entries');
     const entries = JSON.parse(localStorage.getItem(journalKey) || '[]');
     const entriesList = document.querySelector('.entries-list');
     
@@ -1690,7 +1709,7 @@ function loadJournalDataLocal() {
 
 // Journal Management System
 function initializeJournal() {
-    if (!localStorage.getItem('mindwell_journal_entries')) {
+    if (!localStorage.getItem('healhope_journal_entries')) {
         const sampleEntries = [
             {
                 id: 1,
@@ -1713,7 +1732,7 @@ function initializeJournal() {
                 isPrivate: true
             }
         ];
-        localStorage.setItem('mindwell_journal_entries', JSON.stringify(sampleEntries));
+        localStorage.setItem('healhope_journal_entries', JSON.stringify(sampleEntries));
     }
 }
 
@@ -1788,7 +1807,7 @@ async function saveJournalEntry() {
 
 // Fallback local save for journal entries
 function saveJournalEntryLocal(journalEntry) {
-    const journalKey = getUserSpecificKey('mindwell_journal_entries');
+    const journalKey = getUserSpecificKey('healhope_journal_entries');
     const entries = JSON.parse(localStorage.getItem(journalKey) || '[]');
     const newEntry = {
         id: Date.now(),
@@ -1805,7 +1824,7 @@ function saveJournalEntryLocal(journalEntry) {
 }
 
 function loadJournalData() {
-    const entries = JSON.parse(localStorage.getItem('mindwell_journal_entries') || '[]');
+    const entries = JSON.parse(localStorage.getItem('healhope_journal_entries') || '[]');
     const entriesList = document.querySelector('.entries-list');
     
     if (!entriesList) return;
@@ -1854,7 +1873,7 @@ function getMoodEmoji(mood) {
 }
 
 function updateJournalStats() {
-    const entries = JSON.parse(localStorage.getItem('mindwell_journal_entries') || '[]');
+    const entries = JSON.parse(localStorage.getItem('healhope_journal_entries') || '[]');
     const totalWords = entries.reduce((sum, entry) => sum + entry.wordCount, 0);
     const streak = calculateWritingStreak(entries);
     
@@ -1891,7 +1910,7 @@ function calculateWritingStreak(entries) {
 
 // Goals Management System
 function initializeGoals() {
-    if (!localStorage.getItem('mindwell_goals')) {
+    if (!localStorage.getItem('healhope_goals')) {
         const sampleGoals = [
             {
                 id: 1,
@@ -1926,7 +1945,7 @@ function initializeGoals() {
                 createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString()
             }
         ];
-        localStorage.setItem('mindwell_goals', JSON.stringify(sampleGoals));
+        localStorage.setItem('healhope_goals', JSON.stringify(sampleGoals));
     }
 }
 
@@ -2027,7 +2046,7 @@ function closeGoalModal() {
 
 function saveNewGoal(form) {
     const formData = new FormData(form);
-    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goalsKey = getUserSpecificKey('healhope_goals');
     const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
     
     const newGoal = {
@@ -2056,7 +2075,7 @@ function saveNewGoal(form) {
 }
 
 function loadGoalsData() {
-    const goals = JSON.parse(localStorage.getItem('mindwell_goals') || '[]');
+    const goals = JSON.parse(localStorage.getItem('healhope_goals') || '[]');
     const goalsList = document.querySelector('.goal-list');
     
     if (!goalsList) return;
@@ -2101,7 +2120,7 @@ function loadGoalsData() {
 }
 
 function updateGoalProgress(goalId, increment) {
-    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goalsKey = getUserSpecificKey('healhope_goals');
     const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
     const goal = goals.find(g => g.id === goalId);
     
@@ -2196,7 +2215,7 @@ function closeAppointmentModal() {
 
 function saveAppointment(form) {
     const formData = new FormData(form);
-    const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
+    const appointments = JSON.parse(localStorage.getItem('healhope_appointments') || '[]');
     
     const newAppointment = {
         id: Date.now(),
@@ -2211,7 +2230,7 @@ function saveAppointment(form) {
     };
     
     appointments.unshift(newAppointment);
-    localStorage.setItem('mindwell_appointments', JSON.stringify(appointments));
+    localStorage.setItem('healhope_appointments', JSON.stringify(appointments));
     
     showNotification('Appointment booked successfully!', 'success');
     closeAppointmentModal();
@@ -2278,12 +2297,12 @@ async function startCrisisChat() {
                     
                     <div class="chat-messages" id="chatMessages">
                         <div class="chat-message system">
-                            <div class="message-avatar system-avatar">
-                                <i class="fas fa-shield-alt"></i>
+                            <div class="message-avatar system-avatar support-avatar">
+                                ${getSupportAvatarMarkup()}
                             </div>
                             <div class="message-content">
                                 <div class="message-header">
-                                    <span class="sender-name">MindWell Support</span>
+                                    <span class="sender-name">Heal Hope Support</span>
                                     <span class="message-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                 </div>
                                 <div class="message-text">
@@ -2297,8 +2316,8 @@ async function startCrisisChat() {
                             </div>
                         </div>
                         <div class="typing-indicator" id="typingIndicator" style="display: none;">
-                            <div class="typing-avatar">
-                                <i class="fas fa-robot"></i>
+                            <div class="typing-avatar support-avatar">
+                                ${getSupportAvatarMarkup()}
                             </div>
                             <div class="typing-content">
                                 <div class="typing-dots">
@@ -2306,7 +2325,7 @@ async function startCrisisChat() {
                                     <span></span>
                                     <span></span>
                                 </div>
-                                <span class="typing-text">AI Assistant is typing...</span>
+                                <span class="typing-text">Support Assistant is typing...</span>
                             </div>
                         </div>
                     </div>
@@ -2545,8 +2564,8 @@ function addChatMessage(messageData, senderType) {
         `;
     } else if (senderType === 'bot') {
         messageDiv.innerHTML = `
-            <div class="message-avatar">
-                <i class="fas fa-robot"></i>
+            <div class="message-avatar support-avatar">
+                ${getSupportAvatarMarkup()}
             </div>
             <div class="message-content">
                 <p>${formatBotMessage(messageData.content)}</p>
@@ -2792,7 +2811,7 @@ function saveSafetyPlan(form) {
         lastModified: new Date().toISOString()
     };
     
-    localStorage.setItem('mindwell_safety_plan', JSON.stringify(safetyPlan));
+    localStorage.setItem('healhope_safety_plan', JSON.stringify(safetyPlan));
     showNotification('Safety plan saved successfully!', 'success');
     closeSafetyPlan();
 }
@@ -2979,7 +2998,7 @@ async function loadJournalDataFromBackend() {
         if (response.ok) {
             const data = await response.json();
             if (data.success) {
-                localStorage.setItem('mindwell_journal_entries', JSON.stringify(data.entries));
+                localStorage.setItem('healhope_journal_entries', JSON.stringify(data.entries));
                 console.log('Loaded journal entries from backend:', data.entries.length);
             }
         }
@@ -3002,7 +3021,7 @@ async function loadGoalsDataFromBackend() {
         if (response.ok) {
             const data = await response.json();
             if (data.success) {
-                localStorage.setItem('mindwell_goals', JSON.stringify(data.goals));
+                localStorage.setItem('healhope_goals', JSON.stringify(data.goals));
                 console.log('Loaded goals from backend:', data.goals.length);
             }
         }
@@ -3102,7 +3121,7 @@ function displayPersonalizedRecommendations(recommendations) {
 }
 
 function initializeCommunity() {
-    if (!localStorage.getItem('mindwell_community_posts')) {
+    if (!localStorage.getItem('healhope_community_posts')) {
         const samplePosts = [
             {
                 id: 1,
@@ -3125,12 +3144,12 @@ function initializeCommunity() {
                 isAnonymous: false
             }
         ];
-        localStorage.setItem('mindwell_community_posts', JSON.stringify(samplePosts));
+        localStorage.setItem('healhope_community_posts', JSON.stringify(samplePosts));
     }
 }
 
 function initializeResources() {
-    if (!localStorage.getItem('mindwell_resources')) {
+    if (!localStorage.getItem('healhope_resources')) {
         const sampleResources = [
             {
                 id: 1,
@@ -3155,12 +3174,12 @@ function initializeResources() {
                 featured: true
             }
         ];
-        localStorage.setItem('mindwell_resources', JSON.stringify(sampleResources));
+        localStorage.setItem('healhope_resources', JSON.stringify(sampleResources));
     }
 }
 
 function initializeAppointments() {
-    if (!localStorage.getItem('mindwell_appointments')) {
+    if (!localStorage.getItem('healhope_appointments')) {
         const sampleAppointments = [
             {
                 id: 1,
@@ -3174,13 +3193,13 @@ function initializeAppointments() {
                 notes: "Follow-up on anxiety management techniques"
             }
         ];
-        localStorage.setItem('mindwell_appointments', JSON.stringify(sampleAppointments));
+        localStorage.setItem('healhope_appointments', JSON.stringify(sampleAppointments));
     }
 }
 
 // Enhanced Analytics and Insights
 function generateMoodInsights() {
-    const moodData = JSON.parse(localStorage.getItem('mindwell_mood_data') || '[]');
+    const moodData = JSON.parse(localStorage.getItem('healhope_mood_data') || '[]');
     if (moodData.length < 7) return null;
     
     const insights = {
@@ -3223,22 +3242,22 @@ function getCommonMoodFactors(moodData) {
 
 // Enhanced Tab Loading Functions
 function loadMeditationData() {
-    const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
+    const meditationStats = JSON.parse(localStorage.getItem('healhope_meditation_stats') || '{}');
     updateMeditationStats(meditationStats);
 }
 
 function loadAppointmentsData() {
-    const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
+    const appointments = JSON.parse(localStorage.getItem('healhope_appointments') || '[]');
     updateAppointmentsList(appointments);
 }
 
 function loadCommunityData() {
-    const posts = JSON.parse(localStorage.getItem('mindwell_community_posts') || '[]');
+    const posts = JSON.parse(localStorage.getItem('healhope_community_posts') || '[]');
     updateCommunityFeed(posts);
 }
 
 function loadResourcesData() {
-    const resources = JSON.parse(localStorage.getItem('mindwell_resources') || '[]');
+    const resources = JSON.parse(localStorage.getItem('healhope_resources') || '[]');
     updateResourcesGrid(resources);
 }
 
@@ -3361,11 +3380,11 @@ function formatDate(dateString) {
 }
 
 function likePost(postId) {
-    const posts = JSON.parse(localStorage.getItem('mindwell_community_posts') || '[]');
+    const posts = JSON.parse(localStorage.getItem('healhope_community_posts') || '[]');
     const post = posts.find(p => p.id === postId);
     if (post) {
         post.likes += 1;
-        localStorage.setItem('mindwell_community_posts', JSON.stringify(posts));
+        localStorage.setItem('healhope_community_posts', JSON.stringify(posts));
         loadCommunityData();
     }
 }
@@ -3397,8 +3416,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Logout function
 function logout() {
-    localStorage.removeItem('mindwell_user');
-    sessionStorage.removeItem('mindwell_user');
+    localStorage.removeItem('user');
+    localStorage.removeItem('isAuthenticated');
+    localStorage.removeItem('loginTime');
+    localStorage.removeItem('isDemoAccount');
+    localStorage.removeItem('userMode');
+    localStorage.removeItem('healhope_user');
+    sessionStorage.removeItem('healhope_user');
     window.location.href = 'index.html';
 }
 
@@ -3415,7 +3439,7 @@ function createTestRealUser() {
         username: 'yasmeen.naaz',
         firstName: 'Yasmeen',
         lastName: 'Naaz',
-        email: 'yasmeen.naaz@mindwell.com'
+        email: 'admin@healhope.com'
     };
     
     isLoggedIn = true;
@@ -3446,7 +3470,7 @@ function createDemoUser() {
         username: 'demo',
         firstName: 'Yasmeen',
         lastName: 'Demo',
-        email: 'yasmeen.demo@mindwell.com'
+        email: 'yasmeen.demo@healhope.com'
     };
     
     isLoggedIn = true;
@@ -3545,10 +3569,10 @@ function createDemoUser() {
     ];
     
     // Store demo data with user-specific keys
-    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
-    const activitiesKey = getUserSpecificKey('mindwell_activities');
-    const goalsKey = getUserSpecificKey('mindwell_goals');
-    const journalKey = getUserSpecificKey('mindwell_journal_entries');
+    const moodDataKey = getUserSpecificKey('healhope_mood_data');
+    const activitiesKey = getUserSpecificKey('healhope_activities');
+    const goalsKey = getUserSpecificKey('healhope_goals');
+    const journalKey = getUserSpecificKey('healhope_journal_entries');
     
     localStorage.setItem(moodDataKey, JSON.stringify(demoMoodData));
     localStorage.setItem(activitiesKey, JSON.stringify(demoActivities));

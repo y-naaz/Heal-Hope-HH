@@ -11,22 +11,22 @@
 }
 
 :root {
-    /* Beautiful Color Palette - Calm & Professional */
-    --primary-color: #2563eb;
-    --primary-light: #60a5fa;
-    --primary-dark: #1d4ed8;
-    --secondary-color: #059669;
-    --secondary-light: #34d399;
-    --accent-color: #f59e0b;
-    --accent-light: #fbbf24;
+    /* Classy Color Palette - Muted & Elegant */
+    --primary-color: #44556b;
+    --primary-light: #6f8095;
+    --primary-dark: #2f3b4c;
+    --secondary-color: #6f8b77;
+    --secondary-light: #8da395;
+    --accent-color: #ad8f63;
+    --accent-light: #c4ab82;
     
     /* Elegant Gradients */
-    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    --calm-gradient: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
-    --sunset-gradient: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
-    --ocean-gradient: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
-    --mint-gradient: linear-gradient(135deg, #81ecec 0%, #74b9ff 100%);
-    --lavender-gradient: linear-gradient(135deg, #a29bfe 0%, #6c5ce7 100%);
+    --primary-gradient: linear-gradient(135deg, #3e4c5c 0%, #58677a 100%);
+    --calm-gradient: linear-gradient(135deg, #e8ecef 0%, #d7dde2 100%);
+    --sunset-gradient: linear-gradient(135deg, #e7dccf 0%, #ccb9a4 100%);
+    --ocean-gradient: linear-gradient(135deg, #5b6b75 0%, #40545f 100%);
+    --mint-gradient: linear-gradient(135deg, #bcc9c1 0%, #95a89c 100%);
+    --lavender-gradient: linear-gradient(135deg, #7f738f 0%, #655878 100%);
     
     /* Sophisticated Neutrals */
     --white: #ffffff;
@@ -203,7 +203,7 @@ body {
 
 .bubble {
     position: absolute;
-    background: radial-gradient(circle, rgba(37, 99, 235, 0.15), rgba(37, 99, 235, 0.05));
+    background: radial-gradient(circle, rgba(68, 85, 107, 0.15), rgba(68, 85, 107, 0.05));
     border-radius: 50%;
     animation: bubbleFloat 15s infinite linear;
     opacity: 0;
@@ -335,7 +335,7 @@ body {
 .nav-link:hover,
 .nav-link.active {
     color: var(--primary-color);
-    background: rgba(37, 99, 235, 0.1);
+    background: rgba(68, 85, 107, 0.1);
 }
 
 .auth-buttons {
@@ -609,7 +609,7 @@ body {
     height: 200px;
     top: 10%;
     left: 5%;
-    background: radial-gradient(circle, rgba(37, 99, 235, 0.2), rgba(37, 99, 235, 0.05));
+    background: radial-gradient(circle, rgba(68, 85, 107, 0.2), rgba(68, 85, 107, 0.05));
     animation-delay: 0s;
 }
 
@@ -743,7 +743,7 @@ body {
 }
 
 /* Section-specific styles */
-.why-mindwell {
+.why-heal-hope {
     padding: var(--space-32) 0;
     background: var(--gray-50);
 }

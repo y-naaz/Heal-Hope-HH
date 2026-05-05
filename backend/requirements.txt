@@ -6,6 +6,16 @@ channels-redis==4.2.0
 daphne==4.1.2
 redis==5.0.8
 
+# Production serving
+whitenoise==6.7.0          # serves static files without a separate webserver
+dj-database-url==2.2.0     # parses DATABASE_URL env var for PostgreSQL
+psycopg2-binary==2.9.9     # PostgreSQL driver (use psycopg2 on managed hosts)
+gunicorn==22.0.0            # WSGI process manager
+uvicorn[standard]==0.30.1   # ASGI process manager (for WebSockets / Daphne alternative)
+
+# Security
+django-ratelimit==4.1.0    # view-level rate limiting
+
 # Mem0 and AI dependencies
 mem0ai==0.0.11
 openai==1.54.3

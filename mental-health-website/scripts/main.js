@@ -1,5 +1,5 @@
-// Modern Interactive JavaScript for Mindwell
-class MindwellApp {
+// Heal Hope – Main Interactive JavaScript
+class HealHopeApp {
     constructor() {
         this.isRealMode = false; // Start in demo mode
         this.user = null;
@@ -7,9 +7,6 @@ class MindwellApp {
     }
 
     init() {
-        // Auto-authenticate and redirect to dashboard
-        this.autoAuthenticate();
-        
         this.setupLoadingScreen();
         this.setupUserModeToggle();
         this.setupScrollAnimations();
@@ -23,16 +20,16 @@ class MindwellApp {
         this.initializeUserMode();
     }
 
-    // Auto-authenticate users and redirect to dashboard
-    autoAuthenticate() {
+    // Create a demo session (optionally redirect to dashboard)
+    autoAuthenticate(shouldRedirect = false) {
         // Set user as authenticated with default user data
         const defaultUser = {
-            id: 1,
-            first_name: 'Guest',
+            id: 'demo',
+            first_name: 'Demo',
             last_name: 'User',
-            full_name: 'Guest User',
-            email: 'guest@mindwell.com',
-            username: 'guest'
+            full_name: 'Demo User',
+            email: 'demo@healhope.com',
+            username: 'demo'
         };
 
         // Store authentication data
@@ -42,13 +39,12 @@ class MindwellApp {
         localStorage.setItem('userMode', 'demo');
         localStorage.setItem('isDemoAccount', 'true');
 
-        // Show notification and redirect to dashboard
-        setTimeout(() => {
-            createNotification('Welcome! Redirecting to your dashboard...', 'success');
+        if (shouldRedirect) {
+            createNotification('Opening dashboard in demo mode...', 'info');
             setTimeout(() => {
                 window.location.href = 'dashboard.html';
-            }, 1500);
-        }, 2000); // Wait for loading screen to complete
+            }, 600);
+        }
     }
 
     // User Mode Toggle System
@@ -602,8 +598,8 @@ class MindwellApp {
                 createNotification('Login successful! Redirecting to dashboard...', 'success');
                 
                 // Check if this is the demo user account
-                const isDemoAccount = data.email === 'demo@mindwell.com' || 
-                                    result.user.email === 'demo@mindwell.com' ||
+                const isDemoAccount = data.email === 'demo@healhope.com' || 
+                                    result.user.email === 'demo@healhope.com' ||
                                     result.user.username === 'demo';
                 
                 // Store user data with login timestamp
@@ -909,7 +905,7 @@ class MindwellApp {
         floating.style.position = 'absolute';
         floating.style.width = '4px';
         floating.style.height = '4px';
-        floating.style.background = 'rgba(99, 102, 241, 0.6)';
+        floating.style.background = 'rgba(68, 85, 107, 0.55)';
         floating.style.borderRadius = '50%';
         floating.style.pointerEvents = 'none';
         floating.style.left = (rect.left + Math.random() * rect.width) + 'px';
@@ -941,7 +937,7 @@ class MindwellApp {
             position: fixed;
             top: 20px;
             right: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #3e4c5c 0%, #58677a 100%);
             color: white;
             padding: 16px 24px;
             border-radius: 12px;
@@ -1032,10 +1028,10 @@ function currentTestimonial(index) {
 function createNotification(message, type = 'info') {
     const notification = document.createElement('div');
     const colors = {
-        info: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        success: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
-        warning: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
-        error: 'linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%)'
+        info: 'linear-gradient(135deg, #3e4c5c 0%, #58677a 100%)',
+        success: 'linear-gradient(135deg, #6f8b77 0%, #8da395 100%)',
+        warning: 'linear-gradient(135deg, #ad8f63 0%, #c4ab82 100%)',
+        error: 'linear-gradient(135deg, #9f5e5e 0%, #b67979 100%)'
     };
 
     notification.style.cssText = `
@@ -1096,10 +1092,10 @@ additionalStyles.textContent = `
     }
 
     .mood-btn.selected {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+        background: linear-gradient(135deg, #3e4c5c 0%, #58677a 100%) !important;
         color: white !important;
         transform: translateY(-8px) scale(1.1) !important;
-        box-shadow: 0 20px 40px rgba(99, 102, 241, 0.3) !important;
+        box-shadow: 0 20px 40px rgba(68, 85, 107, 0.3) !important;
     }
 
     .mood-btn.selected i {
@@ -1121,7 +1117,7 @@ document.head.appendChild(additionalStyles);
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
-    new MindwellApp();
+    window.healHopeApp = new HealHopeApp();
 });
 
 // Handle page visibility changes for performance
@@ -2271,6 +2267,47 @@ modalStyles.textContent = `
         grid-template-columns: 1fr 1fr;
         gap: 1rem;
     }
+
+    .booking-form .form-group input,
+    .booking-form .form-group select,
+    .booking-form .form-group textarea,
+    .consultation-form .form-group input,
+    .consultation-form .form-group select,
+    .consultation-form .form-group textarea {
+        width: 100%;
+        padding: 0.85rem 0.95rem;
+        border: 1px solid #cbd5e1;
+        border-radius: 0.625rem;
+        background: #ffffff;
+        color: #1e293b;
+        font-size: 0.95rem;
+        line-height: 1.45;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .booking-form .form-group textarea,
+    .consultation-form .form-group textarea {
+        min-height: 120px;
+        padding-top: 0.95rem;
+        resize: vertical;
+    }
+
+    .booking-form .form-group textarea::placeholder,
+    .consultation-form .form-group textarea::placeholder {
+        color: #94a3b8;
+        line-height: 1.45;
+    }
+
+    .booking-form .form-group input:focus,
+    .booking-form .form-group select:focus,
+    .booking-form .form-group textarea:focus,
+    .consultation-form .form-group input:focus,
+    .consultation-form .form-group select:focus,
+    .consultation-form .form-group textarea:focus {
+        outline: none;
+        border-color: #44556b;
+        box-shadow: 0 0 0 3px rgba(68, 85, 107, 0.15);
+    }
     
     .radio-group, .checkbox-group {
         display: flex;
@@ -2567,15 +2604,15 @@ modalStyles.textContent = `
     }
     
     .score-circle.low {
-        background: linear-gradient(135deg, #059669, #10b981);
+        background: linear-gradient(135deg, #6f8b77, #8da395);
     }
     
     .score-circle.moderate {
-        background: linear-gradient(135deg, #f59e0b, #fbbf24);
+        background: linear-gradient(135deg, #ad8f63, #c4ab82);
     }
     
     .score-circle.high {
-        background: linear-gradient(135deg, #dc2626, #ef4444);
+        background: linear-gradient(135deg, #9f5e5e, #b67979);
     }
     
     .score-number {
@@ -3173,23 +3210,28 @@ async function logout() {
 // Make functions globally available
 window.logout = logout;
 window.showDashboard = () => {
+    const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+    const userData = localStorage.getItem('user');
+
+    if (!isAuthenticated || !userData) {
+        if (window.healHopeApp && typeof window.healHopeApp.autoAuthenticate === 'function') {
+            window.healHopeApp.autoAuthenticate();
+        }
+    }
     window.location.href = 'dashboard.html';
 };
 window.toggleUserMode = function() {
-    const app = window.mindwellApp;
+    const app = window.healHopeApp;
     if (app && app.handleModeToggle) {
         const toggle = document.getElementById('userModeToggle');
         app.handleModeToggle({ target: toggle });
     }
 };
 
-// Store app instance globally for external access
-window.mindwellApp = null;
-
 // Export for potential module use
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        MindwellApp,
+        HealHopeApp,
         showBookingModal,
         showSelfAssessmentModal,
         showServiceModal,

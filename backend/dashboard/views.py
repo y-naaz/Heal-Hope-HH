@@ -1,6 +1,6 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
 from django.db.models import Count, Avg, Q, Max, Min
@@ -22,21 +22,10 @@ from chat.memory_service import MemoryService
 
 class MoodEntryViewSet(viewsets.ModelViewSet):
     serializer_class = MoodEntrySerializer
-    permission_classes = [AllowAny]  # Temporary for development - file:// protocol issue
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Handle anonymous users for development
-        if not self.request.user.is_authenticated:
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            try:
-                user = User.objects.get(username='yasmeen')
-            except User.DoesNotExist:
-                user = User.objects.first()
-            if not user:
-                return MoodEntry.objects.none()
-        else:
-            user = self.request.user
+        user = self.request.user
         
         return MoodEntry.objects.filter(user=user)
 
@@ -138,21 +127,10 @@ class MoodEntryViewSet(viewsets.ModelViewSet):
 
 class JournalEntryViewSet(viewsets.ModelViewSet):
     serializer_class = JournalEntrySerializer
-    permission_classes = [AllowAny]  # Temporary for development - file:// protocol issue
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Handle anonymous users for development
-        if not self.request.user.is_authenticated:
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            try:
-                user = User.objects.get(username='yasmeen')
-            except User.DoesNotExist:
-                user = User.objects.first()
-            if not user:
-                return JournalEntry.objects.none()
-        else:
-            user = self.request.user
+        user = self.request.user
         
         return JournalEntry.objects.filter(user=user)
 
@@ -220,21 +198,10 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
 
 class GoalViewSet(viewsets.ModelViewSet):
     serializer_class = GoalSerializer
-    permission_classes = [AllowAny]  # Temporary for development - file:// protocol issue
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Handle anonymous users for development
-        if not self.request.user.is_authenticated:
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            try:
-                user = User.objects.get(username='yasmeen')
-            except User.DoesNotExist:
-                user = User.objects.first()
-            if not user:
-                return Goal.objects.none()
-        else:
-            user = self.request.user
+        user = self.request.user
         
         return Goal.objects.filter(user=user)
 
@@ -307,41 +274,19 @@ class GoalViewSet(viewsets.ModelViewSet):
 
 class ActivityViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ActivitySerializer
-    permission_classes = [AllowAny]  # Temporary for development - file:// protocol issue
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Handle anonymous users for development
-        if not self.request.user.is_authenticated:
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            try:
-                user = User.objects.get(username='yasmeen')
-            except User.DoesNotExist:
-                user = User.objects.first()
-            if not user:
-                return Activity.objects.none()
-        else:
-            user = self.request.user
+        user = self.request.user
         
         return Activity.objects.filter(user=user)
 
 class AppointmentViewSet(viewsets.ModelViewSet):
     serializer_class = AppointmentSerializer
-    permission_classes = [AllowAny]  # Temporary for development - file:// protocol issue
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Handle anonymous users for development
-        if not self.request.user.is_authenticated:
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            try:
-                user = User.objects.get(username='yasmeen')
-            except User.DoesNotExist:
-                user = User.objects.first()
-            if not user:
-                return Appointment.objects.none()
-        else:
-            user = self.request.user
+        user = self.request.user
         
         return Appointment.objects.filter(user=user)
 
@@ -368,21 +313,10 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
 class MeditationSessionViewSet(viewsets.ModelViewSet):
     serializer_class = MeditationSessionSerializer
-    permission_classes = [AllowAny]  # Temporary for development - file:// protocol issue
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Handle anonymous users for development
-        if not self.request.user.is_authenticated:
-            from django.contrib.auth import get_user_model
-            User = get_user_model()
-            try:
-                user = User.objects.get(username='yasmeen')
-            except User.DoesNotExist:
-                user = User.objects.first()
-            if not user:
-                return MeditationSession.objects.none()
-        else:
-            user = self.request.user
+        user = self.request.user
         
         return MeditationSession.objects.filter(user=user)
 
@@ -449,22 +383,10 @@ class MeditationSessionViewSet(viewsets.ModelViewSet):
         })
 
 @api_view(['GET'])
-@permission_classes([AllowAny])  # Temporary for development - file:// protocol issue
+@permission_classes([IsAuthenticated])
 def dashboard_overview(request):
     """Get comprehensive dashboard overview with all stats"""
-    # Handle anonymous users for development
-    if not request.user.is_authenticated:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        # Default to demo user for development
-        try:
-            user = User.objects.get(username='yasmeen')
-        except User.DoesNotExist:
-            user = User.objects.first()  # Fallback to first user
-        if not user:
-            return Response({'error': 'No users found'}, status=404)
-    else:
-        user = request.user
+    user = request.user
     
     today = timezone.now().date()
     
@@ -697,21 +619,10 @@ def generate_user_insights(user):
     return insights[:3]
 
 @api_view(['GET'])
-@permission_classes([AllowAny])  # Temporary for development - file:// protocol issue
+@permission_classes([IsAuthenticated])
 def user_activities(request):
     """Get user activities with pagination"""
-    # Handle anonymous users for development
-    if not request.user.is_authenticated:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        try:
-            user = User.objects.get(username='yasmeen')
-        except User.DoesNotExist:
-            user = User.objects.first()
-        if not user:
-            return Response({'error': 'No users found'}, status=404)
-    else:
-        user = request.user
+    user = request.user
     
     activities = Activity.objects.filter(user=user)
     
@@ -749,21 +660,10 @@ def user_activities(request):
 
 # API endpoints for specific dashboard components
 @api_view(['GET'])
-@permission_classes([AllowAny])  # Temporary for development - file:// protocol issue
+@permission_classes([IsAuthenticated])
 def mood_entries(request):
     """Get mood entries for the authenticated user"""
-    # Handle anonymous users for development
-    if not request.user.is_authenticated:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        try:
-            user = User.objects.get(username='yasmeen')
-        except User.DoesNotExist:
-            user = User.objects.first()
-        if not user:
-            return Response({'error': 'No users found'}, status=404)
-    else:
-        user = request.user
+    user = request.user
     
     entries = MoodEntry.objects.filter(user=user).order_by('-date')
     serializer = MoodEntrySerializer(entries, many=True)
@@ -820,21 +720,10 @@ def create_mood_entry(request):
     }, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])  # Temporary for development - file:// protocol issue
+@permission_classes([IsAuthenticated])
 def journal_entries(request):
     """Get journal entries for the authenticated user"""
-    # Handle anonymous users for development
-    if not request.user.is_authenticated:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        try:
-            user = User.objects.get(username='yasmeen')
-        except User.DoesNotExist:
-            user = User.objects.first()
-        if not user:
-            return Response({'error': 'No users found'}, status=404)
-    else:
-        user = request.user
+    user = request.user
     
     entries = JournalEntry.objects.filter(user=user).order_by('-created_at')
     serializer = JournalEntrySerializer(entries, many=True)
@@ -887,21 +776,10 @@ def create_journal_entry(request):
     }, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])  # Temporary for development - file:// protocol issue
+@permission_classes([IsAuthenticated])
 def goals_list(request):
     """Get goals for the authenticated user"""
-    # Handle anonymous users for development
-    if not request.user.is_authenticated:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        try:
-            user = User.objects.get(username='yasmeen')
-        except User.DoesNotExist:
-            user = User.objects.first()
-        if not user:
-            return Response({'error': 'No users found'}, status=404)
-    else:
-        user = request.user
+    user = request.user
     
     goals = Goal.objects.filter(user=user).order_by('-created_at')
     serializer = GoalSerializer(goals, many=True)
@@ -954,22 +832,10 @@ def create_goal(request):
     }, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
-@permission_classes([AllowAny])  # Temporary for development
+@permission_classes([IsAuthenticated])
 def refresh_dashboard_data(request):
     """Refresh dashboard data by clearing/resetting all user data to zero"""
-    
-    # Handle anonymous users for development
-    if not request.user.is_authenticated:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        try:
-            user = User.objects.get(username='yasmeen')
-        except User.DoesNotExist:
-            user = User.objects.first()
-        if not user:
-            return Response({'error': 'No users found'}, status=404)
-    else:
-        user = request.user
+    user = request.user
     
     try:
         # Clear all user data

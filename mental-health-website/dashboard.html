@@ -3,11 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - MindWell</title>
+    <!-- ⚠️  DEPLOYMENT: change the content values below to your live URLs before deploying
+         Backend (Render): https://healhope-backend.onrender.com
+         WebSocket (Render): wss://healhope-backend.onrender.com
+         In development leave them as localhost -->
+    <meta name="api-base-url" content="http://localhost:8000">
+    <meta name="ws-base-url"  content="ws://localhost:8000">
+    <title>Dashboard - Heal Hope</title>
     <link rel="stylesheet" href="styles/main.css">
     <link rel="stylesheet" href="styles/dashboard.css">
     <link rel="stylesheet" href="styles/chat.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&family=Crimson+Text:ital,wght@0,400;0,600;1,400&family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
@@ -19,7 +25,7 @@
                 <div class="logo-icon">
                     <i class="fas fa-heart"></i>
                 </div>
-                <span class="logo-text">MindWell</span>
+                <span class="logo-text">Heal Hope</span>
             </div>
         </div>
         
@@ -72,7 +78,7 @@
                     <span class="profile-email">john@example.com</span>
                 </div>
             </div>
-            <button class="btn btn-outline btn-sm logout-btn" onclick="logout()">
+            <button class="btn btn-outline btn-small logout-btn" onclick="logout()">
                 <i class="fas fa-sign-out-alt"></i>
                 <span>Logout</span>
             </button>
