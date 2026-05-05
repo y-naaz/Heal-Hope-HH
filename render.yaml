@@ -5,7 +5,7 @@ services:
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate --noinput
-    startCommand: daphne -b 0.0.0.0 -p $PORT mental_health_backend.asgi:application
+    startCommand: gunicorn mental_health_backend.asgi:application --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --workers 1 --timeout 120
     plan: free
     envVars:
       - key: DJANGO_SETTINGS_MODULE
