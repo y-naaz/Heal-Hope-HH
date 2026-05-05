@@ -7,32 +7,32 @@ daphne==4.1.2
 redis==5.0.8
 
 # Production serving
-whitenoise==6.7.0          # serves static files without a separate webserver
-dj-database-url==2.2.0     # parses DATABASE_URL env var for PostgreSQL
-psycopg2-binary==2.9.9     # PostgreSQL driver (use psycopg2 on managed hosts)
-gunicorn==22.0.0            # WSGI process manager
-uvicorn[standard]==0.30.1   # ASGI process manager (for WebSockets / Daphne alternative)
+whitenoise==6.7.0
+dj-database-url==2.2.0
+psycopg2-binary==2.9.9
+gunicorn==22.0.0
+uvicorn[standard]==0.30.1
 
 # Security
-django-ratelimit==4.1.0    # view-level rate limiting
+django-ratelimit==4.1.0
 
-# Mem0 and AI dependencies
-mem0ai==0.0.11
+# AI Keys — lightweight clients only (no torch/transformers on free tier)
 openai==1.54.3
 google-generativeai==0.8.3
-langchain==0.3.7
-langchain-openai==0.2.8
-langchain-community==0.3.7
-# chromadb==0.5.15  # Disabled due to chroma-hnswlib compilation issues
-sentence-transformers==3.2.1
-numpy==1.26.4
-pandas==2.2.3
 python-dotenv==1.0.1
 
-# Vector database and embeddings
-# faiss-cpu==1.8.0  # Disabled due to compilation issues
-tiktoken==0.8.0
+# Mem0 (lightweight API client)
+mem0ai==0.0.11
 
-# Additional utilities
+# Utilities
 psutil==6.1.0
 pydantic==2.10.2
+
+# ── Heavy ML packages below are disabled on Render free tier (512MB RAM limit) ──
+# sentence-transformers==3.2.1  # pulls in torch ~1GB — enable on paid tier
+# langchain==0.3.7
+# langchain-openai==0.2.8
+# langchain-community==0.3.7
+# tiktoken==0.8.0
+# numpy==1.26.4
+# pandas==2.2.3
