@@ -38,6 +38,7 @@ services:
   - type: redis
     name: healhope-redis
     plan: free
+    ipAllowList: []
     maxmemoryPolicy: allkeys-lru
 
 databases:
