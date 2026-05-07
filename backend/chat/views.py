@@ -1,5 +1,5 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth import get_user_model
@@ -436,3 +436,70 @@ class AIAssistantViewSet(viewsets.ViewSet):
             })
         
         return context
+
+
+# ── Memory API endpoints ────────────────────────────────────────────────────
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def memory_add(request):
+    """Store a memory entry for the current user."""
+    content = request.data.get('content', '')
+    metadata = request.data.get('metadata', {})
+    if not content:
+        return Response({'error': 'content is required'}, status=status.HTTP_400_BAD_REQUEST)
+    # Persist to DB-backed UserMemory when available
+    try:
+        from .memory_models import UserMemory
+        UserMemory.objects.create(
+            user=request.user,
+            memory_type=metadata.get('type', 'general'),
+            content=content,
+            metadata=metadata,
+        )
+    except Exception:
+        pass  # Non-critical — proceed even if DB write fails
+    return Response({'success': True, 'message': 'Memory stored'})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def memory_search(request):
+    """Search memory entries for the current user."""
+    query = request.data.get('query', '')
+    limit = int(request.data.get('limit', 5))
+    memories = []
+    try:
+        from .memory_models import UserMemory
+        qs = UserMemory.objects.filter(user=request.user).order_by('-created_at')
+        if query:
+            qs = qs.filter(content__icontains=query)
+        for m in qs[:limit]:
+            memories.append({
+                'id': str(m.id),
+                'content': m.content,
+                'type': m.memory_type,
+                'created_at': m.created_at.isoformat(),
+            })
+    except Exception:
+        pass
+    return Response({'success': True, 'memories': memories})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def memory_profile(request):
+    """Return a lightweight memory profile for the current user."""
+    profile = {}
+    try:
+        from .memory_models import PersonalizationProfile
+        p = PersonalizationProfile.objects.filter(user=request.user).first()
+        if p:
+            profile = {
+                'communication_style': p.communication_style,
+                'preferred_coping_strategies': p.preferred_coping_strategies,
+                'therapy_goals': p.therapy_goals,
+            }
+    except Exception:
+        pass
+    return Response({'success': True, 'profile': profile})

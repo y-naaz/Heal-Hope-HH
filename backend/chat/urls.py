@@ -10,4 +10,7 @@ router.register(r'ai-assistant', views.AIAssistantViewSet, basename='aiassistant
 
 urlpatterns = [
     path('api/', include(router.urls)),
+    path('memory/add/', views.memory_add, name='memory-add'),
+    path('memory/search/', views.memory_search, name='memory-search'),
+    path('memory/profile/', views.memory_profile, name='memory-profile'),
 ]

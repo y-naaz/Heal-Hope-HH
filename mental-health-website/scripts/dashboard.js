@@ -2391,8 +2391,7 @@ async function startCrisisChat() {
 // Connect to WebSocket for crisis support with enhanced AI
 function connectToSupportChat() {
     const userId = currentUser?.id || currentUser?.username || 'demo';
-    const wsScheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsPath = `${wsScheme}://127.0.0.1:8000/ws/crisis/${userId}/`;
+    const wsPath = `${CHAT_WS_URL}/ws/crisis/${userId}/`;
     
     try {
         chatSocket = new WebSocket(wsPath);
