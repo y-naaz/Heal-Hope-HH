@@ -1,11 +1,11 @@
 services:
   # ── Django Backend ─────────────────────────────────────────────────────────
   - type: web
-    name: healhope-backend
+    name: mindwell-backend
     runtime: python
     rootDir: backend
-    buildCommand: pip install --no-cache-dir -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate --noinput
-    startCommand: uvicorn mental_health_backend.asgi:application --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 120
+    buildCommand: pip install --no-cache-dir -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate --noinput && python manage.py seed_support_groups
+    startCommand: daphne -b 0.0.0.0 -p $PORT mental_health_backend.asgi:application
     plan: free
     envVars:
       - key: DJANGO_SETTINGS_MODULE
@@ -15,37 +15,74 @@ services:
       - key: DEBUG
         value: "False"
       - key: ALLOWED_HOSTS
-        value: healhope-backend.onrender.com
+        value: mindwell-backend.onrender.com
       - key: CORS_ALLOWED_ORIGINS
-        value: https://heal-hope-hh.vercel.app,https://healhope.vercel.app,https://heal-hope.vercel.app
+        value: https://mindwell.vercel.app,https://mindwell.vercel.app,https://mindwell.vercel.app
       - key: DATABASE_URL
         fromDatabase:
-          name: healhope-db
+          name: mindwell-db
           property: connectionString
       - key: REDIS_URL
         fromService:
-          name: healhope-redis
+          name: mindwell-redis
           type: redis
           property: connectionString
       - key: GOOGLE_API_KEY
         sync: false                  # You set this manually in Render dashboard
+      - key: GROQ_API_KEY
+        sync: false                  # Set in Render dashboard
       - key: OPENAI_API_KEY
         sync: false
       - key: MEM0_API_KEY
         sync: false
+      - key: EMAIL_HOST_USER
+        sync: false                  # Your Gmail address — set in Render dashboard
+      - key: EMAIL_HOST_PASSWORD
+        sync: false                  # Gmail App Password — set in Render dashboard
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_CLAIMS_EMAIL
+        sync: false
       - key: PYTHON_VERSION
         value: "3.11.0"
 
+  # ── Daily goal deadline reminder (cron) ────────────────────────────────────
+  - type: cron
+    name: mindwell-goal-reminders
+    runtime: python
+    rootDir: backend
+    schedule: "0 8 * * *"           # Every day at 08:00 UTC
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: python manage.py send_goal_reminders
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: mental_health_backend.settings
+      - key: SECRET_KEY
+        fromService:
+          name: mindwell-backend
+          type: web
+          envVarKey: SECRET_KEY
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mindwell-db
+          property: connectionString
+      - key: EMAIL_HOST_USER
+        sync: false
+      - key: EMAIL_HOST_PASSWORD
+        sync: false
+
   # ── Redis (for WebSocket channel layer) ────────────────────────────────────
   - type: redis
-    name: healhope-redis
+    name: mindwell-redis
     plan: free
     ipAllowList: []
     maxmemoryPolicy: allkeys-lru
 
 databases:
   # ── PostgreSQL ──────────────────────────────────────────────────────────────
-  - name: healhope-db
+  - name: mindwell-db
     plan: free
-    databaseName: healhope
-    user: healhope
+    databaseName: mindwell
+    user: mindwell

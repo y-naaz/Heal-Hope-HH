@@ -1,4 +1,4 @@
-// Dashboard JavaScript for Heal Hope Mental Health Website
+// Dashboard JavaScript for MindWell Mental Health Website
 
 // Global variables
 let currentUser = null;
@@ -8,22 +8,35 @@ let moodChart = null;
 let breathingInterval = null;
 let breathingCycle = 'inhale';
 let breathingTimer = null;
-let isDemoMode = false; // Flag to track if we're in demo mode
+let isDemoMode = false;
+
+// Returns local date as YYYY-MM-DD (never UTC — fixes timezone off-by-one)
+function localDateStr(date) {
+    const d = date || new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+// Simple TTL cache — avoids redundant backend calls on tab switches
+const _cache = {};
+function cacheGet(key, ttlMs = 60000) {
+    const entry = _cache[key];
+    if (entry && Date.now() - entry.ts < ttlMs) return entry.data;
+    return null;
+}
+function cacheSet(key, data) { _cache[key] = { data, ts: Date.now() }; }
+function cacheInvalidate(key) { delete _cache[key]; }
 
 // ─── API Configuration ────────────────────────────────────────────────────────
-// Pick the backend origin from a <meta> tag if present so the same HTML file
-// works in both local development and production without code changes.
-//
-// In production, add this inside your HTML <head>:
-//   <meta name="api-base-url" content="https://api.yourdomain.com">
-//   <meta name="ws-base-url"  content="wss://api.yourdomain.com">
-//
-// For local dev (no meta tag) it defaults to http://localhost:8000.
+// On localhost: always use local backend (meta tag ignored for local dev).
+// On any other host: use <meta name="api-base-url"> if present, else Render.
+const _dashIsLocal = ['localhost', '127.0.0.1', ''].includes(window.location.hostname);
 const _metaApiUrl = document.querySelector('meta[name="api-base-url"]');
 const _metaWsUrl  = document.querySelector('meta[name="ws-base-url"]');
 
-const API_BASE_URL  = (_metaApiUrl && _metaApiUrl.content) ? _metaApiUrl.content.replace(/\/$/, '') : 'http://localhost:8000';
-const CHAT_WS_URL   = (_metaWsUrl  && _metaWsUrl.content)  ? _metaWsUrl.content.replace(/\/$/, '')  : 'ws://localhost:8000';
+const API_BASE_URL  = _dashIsLocal ? 'http://localhost:8000'
+    : ((_metaApiUrl && _metaApiUrl.content) ? _metaApiUrl.content.replace(/\/$/, '') : 'https://mindwell-backend.onrender.com');
+const CHAT_WS_URL   = _dashIsLocal ? 'ws://localhost:8000'
+    : ((_metaWsUrl  && _metaWsUrl.content)  ? _metaWsUrl.content.replace(/\/$/, '')  : 'wss://mindwell-backend.onrender.com');
 const SUPPORT_AVATAR_URL = 'https://randomuser.me/api/portraits/women/68.jpg?v=20260505';
 const SUPPORT_AVATAR_FALLBACK_URL = 'https://i.pravatar.cc/120?img=47';
 
@@ -39,6 +52,18 @@ const API_ENDPOINTS = {
         rooms: `${API_BASE_URL}/chat/rooms/`,
         messages: `${API_BASE_URL}/chat/messages/`,
         ai_chat: `${API_BASE_URL}/chat/ai-chat/`
+    },
+    safetyPlan: {
+        get:         `${API_BASE_URL}/dashboard/api/safety-plan/`,
+        save:        `${API_BASE_URL}/dashboard/api/safety-plan/save/`,
+        suggestions: (section) => `${API_BASE_URL}/dashboard/api/safety-plan/suggestions/?section=${section}`,
+    },
+    community: {
+        posts: `${API_BASE_URL}/chat/community/posts/`,
+        like: (id) => `${API_BASE_URL}/chat/community/posts/${id}/like/`,
+        groups: `${API_BASE_URL}/chat/community/groups/`,
+        groupJoin: (id) => `${API_BASE_URL}/chat/community/groups/${id}/join/`,
+        redditFeed: (sub) => `${API_BASE_URL}/dashboard/api/reddit-feed/?sub=${sub}`,
     },
     memory: {
         add: `${API_BASE_URL}/chat/memory/add/`,
@@ -58,6 +83,7 @@ const API_ENDPOINTS = {
     journal: {
         entries: `${API_BASE_URL}/dashboard/api/journal-entries/`,
         create: `${API_BASE_URL}/dashboard/api/journal-entries/create/`,
+        analyse: `${API_BASE_URL}/dashboard/api/journal-entries/analyse/`,
         stats: `${API_BASE_URL}/dashboard/api/journal-entries/stats/`
     },
     goals: {
@@ -75,6 +101,13 @@ const API_ENDPOINTS = {
     }
 };
 
+// Returns Authorization header for cross-origin API calls using the stored token.
+// Falls back gracefully when no token is present (demo mode / not logged in).
+function getAuthHeaders() {
+    const token = localStorage.getItem('authToken');
+    return token ? { 'Authorization': `Token ${token}` } : {};
+}
+
 // DOM Content Loaded
 document.addEventListener('DOMContentLoaded', function() {
     console.log('Dashboard script loaded successfully');
@@ -86,6 +119,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Initialize dashboard
 function initializeDashboard() {
+    // Clean up stale non-user-specific localStorage keys from old versions
+    ['mindwell_goals', 'mindwell_journal_entries', 'mindwell_mood_data', 'mindwell_activities'].forEach(k => {
+        if (localStorage.getItem(k)) localStorage.removeItem(k);
+    });
+
     checkAuthentication();
     setupTabNavigation();
     setupDashboardData();
@@ -94,8 +132,8 @@ function initializeDashboard() {
     setupBreathingExercise();
     setupCharts();
     loadUserData();
-    setupCrisisChatButton(); // Add crisis chat button setup
-    setupRefreshButton(); // Add refresh button setup
+    setupCrisisChatButton();
+    setupRefreshButton();
 }
 
 function getSupportAvatarMarkup() {
@@ -136,9 +174,11 @@ async function checkAuthentication() {
         isLoggedIn = true;
         updateUserProfile();
         console.log('User data loaded from localStorage:', currentUser);
-        
-        // Load dashboard immediately with local data
+
+        // Load dashboard and analytics now that isLoggedIn is true
         await loadDashboardData();
+        loadMoodTrackerData();
+        initPushNotifications(); // start SW + push subscription
     } catch (parseError) {
         console.error('Failed to parse user data:', parseError);
         localStorage.removeItem('user');
@@ -162,10 +202,10 @@ async function verifyAuthWithBackend() {
     
     try {
         console.log('Verifying authentication with backend...');
-        const response = await fetch('http://localhost:8000/users/auth/status/', {
-            credentials: 'include',
+        const response = await fetch(API_ENDPOINTS.auth.status, {
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             }
         });
         
@@ -224,9 +264,9 @@ function redirectToLogin() {
 // Load user profile data from backend
 async function loadUserProfileFromBackend() {
     try {
-        const response = await fetch('http://localhost:8000/users/auth/profile/', {
-            credentials: 'include',
+        const response = await fetch(API_ENDPOINTS.auth.profile, {
             headers: {
+                ...getAuthHeaders(),
                 'Content-Type': 'application/json',
             }
         });
@@ -263,6 +303,13 @@ function updateUserProfile() {
         if (profileName) profileName.textContent = `${firstName} ${lastName}`;
         if (profileEmail) profileEmail.textContent = email;
         if (welcomeHeader) welcomeHeader.textContent = `Welcome back, ${firstName}!`;
+
+        const avatarImg = document.querySelector('.profile-avatar img');
+        if (avatarImg) {
+            const fullName = encodeURIComponent(`${firstName} ${lastName}`.trim());
+            avatarImg.src = `https://ui-avatars.com/api/?name=${fullName}&background=6366f1&color=fff&t=${Date.now()}`;
+            avatarImg.alt = `${firstName} ${lastName}`;
+        }
         
         console.log('Profile updated with:', { firstName, lastName, email });
     }
@@ -302,7 +349,10 @@ function switchTab(tabName) {
     });
 
     currentTab = tabName;
-    
+
+    // Close community WebSocket when leaving the community tab
+    if (tabName !== 'community') disconnectCommunitySocket();
+
     // Load tab-specific data
     loadTabData(tabName);
 }
@@ -332,6 +382,7 @@ function loadTabData(tabName) {
             loadGoalsData();
             break;
         case 'journal':
+            initializeJournal();
             loadJournalData();
             break;
     }
@@ -346,7 +397,7 @@ function getUserSpecificKey(baseKey) {
 // Check if user is demo account
 function isDemoUser() {
     if (!currentUser) return false;
-    return currentUser.email === 'demo@healhope.com' || 
+    return currentUser.email === 'demo@mindwell.com' || 
            currentUser.username === 'demo' || 
            currentUser.id === 'demo';
 }
@@ -354,21 +405,23 @@ function isDemoUser() {
 // Setup dashboard data - now using backend APIs
 async function setupDashboardData() {
     try {
-        // Load real data from backend
-        await loadUserMoodData();
-        await loadUserActivities();
-        await loadUserMemoryProfile();
+        // Run all three in parallel instead of sequentially
+        await Promise.all([
+            loadUserMoodData(),
+            loadUserActivities()
+        ]);
+        // Memory profile is non-critical — run in background, don't block
+        loadUserMemoryProfile().catch(() => {});
     } catch (error) {
         console.error('Error setting up dashboard data:', error);
-        // Fallback to sample data if backend is unavailable
         setupFallbackData();
     }
 }
 
 // Fallback to sample data if backend is unavailable
 function setupFallbackData() {
-    const moodDataKey = getUserSpecificKey('healhope_mood_data');
-    const activitiesKey = getUserSpecificKey('healhope_activities');
+    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+    const activitiesKey = getUserSpecificKey('mindwell_activities');
     
     // Only create sample data for demo users, real users should start with empty data
     if (isDemoUser()) {
@@ -395,21 +448,17 @@ function setupFallbackData() {
 
 // Load user mood data from backend
 async function loadUserMoodData() {
-    const moodDataKey = getUserSpecificKey('healhope_mood_data');
-    
+    if (cacheGet('moodData')) return; // Fresh data in cache, skip fetch
+    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
     try {
         const response = await fetch(API_ENDPOINTS.mood.entries, {
-            credentials: 'include',
-            headers: {
-                'Content-Type': 'application/json',
-            }
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
         });
-        
         if (response.ok) {
             const data = await response.json();
             if (data.success) {
                 localStorage.setItem(moodDataKey, JSON.stringify(data.mood_entries));
-                console.log('Loaded mood data from backend for user:', currentUser?.username, data.mood_entries.length, 'entries');
+                cacheSet('moodData', true);
             }
         }
     } catch (error) {
@@ -419,21 +468,17 @@ async function loadUserMoodData() {
 
 // Load user activities from backend
 async function loadUserActivities() {
-    const activitiesKey = getUserSpecificKey('healhope_activities');
-    
+    if (cacheGet('activitiesData')) return; // Fresh data in cache, skip fetch
+    const activitiesKey = getUserSpecificKey('mindwell_activities');
     try {
         const response = await fetch(API_ENDPOINTS.dashboard.activities, {
-            credentials: 'include',
-            headers: {
-                'Content-Type': 'application/json',
-            }
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
         });
-        
         if (response.ok) {
             const data = await response.json();
             if (data.success) {
                 localStorage.setItem(activitiesKey, JSON.stringify(data.activities));
-                console.log('Loaded activities from backend for user:', currentUser?.username, data.activities.length, 'activities');
+                cacheSet('activitiesData', true);
             }
         }
     } catch (error) {
@@ -445,9 +490,9 @@ async function loadUserActivities() {
 async function loadUserMemoryProfile() {
     try {
         const response = await fetch(API_ENDPOINTS.memory.profile, {
-            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             }
         });
         
@@ -456,7 +501,7 @@ async function loadUserMemoryProfile() {
             if (data.success) {
                 console.log('User memory profile loaded:', data.profile);
                 // Store memory profile for personalization
-                localStorage.setItem('healhope_memory_profile', JSON.stringify(data.profile));
+                localStorage.setItem('mindwell_memory_profile', JSON.stringify(data.profile));
             }
         }
     } catch (error) {
@@ -476,7 +521,7 @@ function generateSampleMoodData() {
         const randomMood = moodValues[Math.floor(Math.random() * moodValues.length)];
         
         moods.push({
-            date: date.toISOString().split('T')[0],
+            date: localDateStr(date),
             mood: randomMood,
             score: moodScores[randomMood],
             note: i === 0 ? "Feeling good today! The meditation really helped." : "",
@@ -527,10 +572,12 @@ async function loadDashboardData() {
     
     try {
         // Load comprehensive dashboard data from backend
-        const response = await fetch(API_ENDPOINTS.dashboard.overview, {
-            credentials: 'include',
+        const localToday = new Date();
+        const todayParam = `${localToday.getFullYear()}-${String(localToday.getMonth()+1).padStart(2,'0')}-${String(localToday.getDate()).padStart(2,'0')}`;
+        const response = await fetch(`${API_ENDPOINTS.dashboard.overview}?today=${todayParam}`, {
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             }
         });
         
@@ -578,11 +625,10 @@ async function loadDashboardData() {
 
 // Fallback dashboard data loading
 async function loadFallbackDashboardData() {
-    await loadUserMoodData();
-    await loadUserActivities();
+    await Promise.all([loadUserMoodData(), loadUserActivities()]);
     
-    const moodDataKey = getUserSpecificKey('healhope_mood_data');
-    const activitiesKey = getUserSpecificKey('healhope_activities');
+    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+    const activitiesKey = getUserSpecificKey('mindwell_activities');
     
     const moodData = JSON.parse(localStorage.getItem(moodDataKey) || '[]');
     const activities = JSON.parse(localStorage.getItem(activitiesKey) || '[]');
@@ -600,64 +646,64 @@ function updateDashboardStatsFromBackend(dashboardStats) {
     
     // Update today's mood
     const moodValue = document.querySelector('.stat-card .stat-value');
-    const moodSubtext = document.querySelector('.stat-card .stat-subtext');
-    
+
     if (moodValue && dashboardStats.todays_mood) {
         const moodLabels = {
             'very-sad': 'Very Sad',
-            'sad': 'Sad', 
+            'sad': 'Sad',
             'neutral': 'Neutral',
             'good': 'Good',
             'very-good': 'Very Good'
         };
         moodValue.textContent = moodLabels[dashboardStats.todays_mood.mood] || 'Not logged';
-        
-        if (moodSubtext && dashboardStats.todays_mood.change) {
+
+        const moodSubtext = document.querySelector('.stat-card .stat-change');
+        if (moodSubtext) {
             const change = dashboardStats.todays_mood.change;
-            moodSubtext.textContent = `${change > 0 ? '+' : ''}${change}% from yesterday`;
-            moodSubtext.className = `stat-subtext ${change > 0 ? 'positive' : change < 0 ? 'negative' : 'neutral'}`;
+            if (change === null || change === undefined) {
+                moodSubtext.textContent = 'No entry for yesterday';
+                moodSubtext.className = 'stat-change neutral';
+            } else if (change === 0) {
+                moodSubtext.textContent = 'Same as yesterday';
+                moodSubtext.className = 'stat-change neutral';
+            } else {
+                moodSubtext.textContent = `${change > 0 ? '+' : ''}${change}% from yesterday`;
+                moodSubtext.className = `stat-change ${change > 0 ? 'positive' : 'negative'}`;
+            }
         }
     }
-    
+
     // Update meditation streak
     const streakElements = document.querySelectorAll('.stat-card');
     if (streakElements.length > 1 && dashboardStats.meditation_streak !== undefined) {
         const streakValue = streakElements[1].querySelector('.stat-value');
-        const streakSubtext = streakElements[1].querySelector('.stat-subtext');
-        
-        if (streakValue) {
-            streakValue.textContent = `${dashboardStats.meditation_streak} days`;
-        }
-        if (streakSubtext && dashboardStats.meditation_streak > 0) {
-            streakSubtext.textContent = dashboardStats.meditation_streak_text || 'Personal best!';
-            streakSubtext.className = 'stat-subtext positive';
+        const streakChange = streakElements[1].querySelector('.stat-change');
+
+        if (streakValue) streakValue.textContent = `${dashboardStats.meditation_streak} days`;
+        if (streakChange && dashboardStats.meditation_streak > 0) {
+            streakChange.textContent = dashboardStats.meditation_streak_text || 'Personal best!';
+            streakChange.className = 'stat-change positive';
         }
     }
-    
+
     // Update next session
     if (streakElements.length > 2 && dashboardStats.next_session) {
         const sessionValue = streakElements[2].querySelector('.stat-value');
-        const sessionSubtext = streakElements[2].querySelector('.stat-subtext');
-        
-        if (sessionValue) {
-            sessionValue.textContent = dashboardStats.next_session.time || 'Tomorrow';
-        }
-        if (sessionSubtext) {
-            sessionSubtext.textContent = dashboardStats.next_session.details || '2:00 PM with Dr. Smith';
-        }
+        const sessionChange = streakElements[2].querySelector('.stat-change');
+
+        if (sessionValue) sessionValue.textContent = dashboardStats.next_session.time || 'Tomorrow';
+        if (sessionChange) sessionChange.textContent = dashboardStats.next_session.details || '2:00 PM with Dr. Smith';
     }
-    
+
     // Update weekly goals
     if (streakElements.length > 3 && dashboardStats.weekly_goals) {
         const goalsValue = streakElements[3].querySelector('.stat-value');
-        const goalsSubtext = streakElements[3].querySelector('.stat-subtext');
-        
-        if (goalsValue) {
-            goalsValue.textContent = dashboardStats.weekly_goals.progress || '4/6';
-        }
-        if (goalsSubtext) {
-            goalsSubtext.textContent = dashboardStats.weekly_goals.status || 'On track';
-            goalsSubtext.className = `stat-subtext ${dashboardStats.weekly_goals.on_track ? 'positive' : 'neutral'}`;
+        const goalsChange = streakElements[3].querySelector('.stat-change');
+
+        if (goalsValue) goalsValue.textContent = dashboardStats.weekly_goals.progress || '4/6';
+        if (goalsChange) {
+            goalsChange.textContent = dashboardStats.weekly_goals.status || 'On track';
+            goalsChange.className = `stat-change ${dashboardStats.weekly_goals.on_track ? 'positive' : 'neutral'}`;
         }
     }
 }
@@ -707,6 +753,27 @@ function updateRecentActivitiesFromBackend(recentActivities) {
     });
 }
 
+// Refresh the mood trend chart by re-fetching dashboard-overview chart data
+async function refreshMoodTrendChart() {
+    if (isDemoMode || !isLoggedIn) return;
+    try {
+        const ld = new Date();
+        const tp = `${ld.getFullYear()}-${String(ld.getMonth()+1).padStart(2,'0')}-${String(ld.getDate()).padStart(2,'0')}`;
+        const response = await fetch(`${API_ENDPOINTS.dashboard.overview}?today=${tp}`, {
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+        });
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.mood_chart_data) {
+                if (moodChart) moodChart.destroy();
+                createMoodChartFromBackend(data.mood_chart_data);
+            }
+        }
+    } catch (e) {
+        console.error('Failed to refresh mood trend chart:', e);
+    }
+}
+
 function createMoodChartFromBackend(moodChartData) {
     console.log('Creating mood chart from backend data:', moodChartData);
     
@@ -737,14 +804,15 @@ function createMoodChartFromBackend(moodChartData) {
                 label: 'Mood Score',
                 data: scores,
                 borderColor: '#44556b',
-                backgroundColor: 'rgba(68, 85, 107, 0.12)',
+                backgroundColor: 'rgba(68, 85, 107, 0.1)',
                 borderWidth: 3,
                 fill: true,
                 tension: 0.4,
-                pointBackgroundColor: '#44556b',
+                spanGaps: false,
+                pointBackgroundColor: scores.map(s => s === null ? 'transparent' : '#44556b'),
                 pointBorderColor: '#ffffff',
                 pointBorderWidth: 2,
-                pointRadius: 6,
+                pointRadius: scores.map(s => s === null ? 0 : 6),
                 pointHoverRadius: 8
             }]
         },
@@ -752,36 +820,33 @@ function createMoodChartFromBackend(moodChartData) {
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: {
-                    display: false
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            const scoreToMood = { 2: 'Very Sad', 4: 'Sad', 6: 'Neutral', 8: 'Good', 10: 'Very Good' };
+                            return ctx.raw !== null ? scoreToMood[ctx.raw] || ctx.raw : 'No entry';
+                        }
+                    }
                 }
             },
             scales: {
                 y: {
-                    beginAtZero: true,
+                    min: 1,
                     max: 10,
                     ticks: {
                         stepSize: 2,
                         callback: function(value) {
-                            const moodLabels = {
-                                0: 'Very Sad',
-                                2: 'Sad', 
-                                4: 'Low',
-                                6: 'Neutral',
-                                8: 'Good',
-                                10: 'Very Good'
-                            };
-                            return moodLabels[value] || value;
+                            const labels = { 2: 'Very Sad', 4: 'Sad', 6: 'Neutral', 8: 'Good', 10: 'Very Good' };
+                            return labels[value] || '';
                         }
                     },
                     grid: {
-                        color: 'rgba(0, 0, 0, 0.1)'
+                        color: 'rgba(0, 0, 0, 0.08)'
                     }
                 },
                 x: {
-                    grid: {
-                        display: false
-                    }
+                    grid: { display: false }
                 }
             },
             elements: {
@@ -863,9 +928,9 @@ async function loadPersonalizedInsights() {
     try {
         const response = await fetch(API_ENDPOINTS.memory.search, {
             method: 'POST',
-            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             },
             body: JSON.stringify({
                 query: 'mood patterns and mental health insights',
@@ -917,7 +982,7 @@ function displayPersonalizedInsights(memories) {
 
 // Update dashboard stats
 function updateDashboardStats(moodData) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDateStr();
     const todayMood = moodData.find(entry => entry.date === today);
     
     // Update today's mood
@@ -965,7 +1030,9 @@ function createMoodChart(moodData) {
     const ctx = canvas.getContext('2d');
     
     const labels = moodData.map(entry => {
-        const date = new Date(entry.date);
+        // Parse date-only strings as local noon to avoid UTC midnight timezone shift
+        const [y, m, d] = (entry.date || '').split('-').map(Number);
+        const date = new Date(y, m - 1, d, 12);
         return date.toLocaleDateString('en-US', { weekday: 'short' });
     });
     
@@ -1060,16 +1127,16 @@ async function saveMood() {
         score: moodScores[selectedMood.getAttribute('data-mood')],
         note: moodNote,
         factors: selectedFactors,
-        date: new Date().toISOString().split('T')[0]
+        date: localDateStr()
     };
     
     try {
         // Save to backend
-        const response = await fetch(API_ENDPOINTS.mood.entries, {
+        const response = await fetch(API_ENDPOINTS.mood.create, {
             method: 'POST',
-            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             },
             body: JSON.stringify(moodEntry)
         });
@@ -1078,19 +1145,23 @@ async function saveMood() {
             const data = await response.json();
             if (data.success) {
                 // Add to Mem0 memory system
-                await addToMemorySystem('mood', `User logged mood: ${selectedMood.textContent.trim()}. Note: ${moodNote}. Factors: ${selectedFactors.join(', ')}`);
+                addToMemorySystem('mood', `User logged mood: ${selectedMood.textContent.trim()}. Note: ${moodNote}. Factors: ${selectedFactors.join(', ')}`);
                 
                 // Update local storage for immediate UI update
                 await loadUserMoodData();
                 
                 showNotification('Mood logged successfully!', 'success');
-                
+
                 // Reset form
                 selectedMood.classList.remove('selected');
                 document.querySelector('.mood-details textarea').value = '';
                 document.querySelectorAll('.factor-tag.selected').forEach(tag => tag.classList.remove('selected'));
-                
-                // Update dashboard if we're on it
+
+                // Refresh analytics and trend chart immediately after saving
+                loadMoodTrackerData();
+                refreshMoodTrendChart();
+
+                // Update dashboard stats if on dashboard tab
                 if (currentTab === 'dashboard') {
                     loadDashboardData();
                 }
@@ -1111,9 +1182,9 @@ async function addToMemorySystem(category, content) {
     try {
         const response = await fetch(API_ENDPOINTS.memory.add, {
             method: 'POST',
-            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             },
             body: JSON.stringify({
                 content: content,
@@ -1133,25 +1204,39 @@ async function addToMemorySystem(category, content) {
     }
 }
 
-// Load mood tracker data
-function loadMoodTrackerData() {
-    const moodDataKey = getUserSpecificKey('healhope_mood_data');
-    const moodData = JSON.parse(localStorage.getItem(moodDataKey) || '[]');
-    
-    if (moodData.length > 0) {
-        // Calculate analytics
-        const thisWeekData = moodData.slice(-7);
-        const averageScore = thisWeekData.reduce((sum, entry) => sum + entry.score, 0) / thisWeekData.length;
-        const mostCommonMood = getMostCommonMood(thisWeekData);
-        const lastWeekData = moodData.slice(-14, -7);
-        const lastWeekAverage = lastWeekData.length > 0 ? 
-            lastWeekData.reduce((sum, entry) => sum + entry.score, 0) / lastWeekData.length : 0;
-        
-        const improvement = lastWeekAverage > 0 ? 
-            ((averageScore - lastWeekAverage) / lastWeekAverage * 100).toFixed(0) : 0;
-        
-        // Update analytics display
-        updateMoodAnalytics(averageScore, mostCommonMood, improvement);
+// Load mood tracker data — fetches live analytics from the backend
+async function loadMoodTrackerData() {
+    if (isDemoMode || !isLoggedIn) {
+        // Demo fallback: compute from localStorage
+        const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+        const moodData = JSON.parse(localStorage.getItem(moodDataKey) || '[]');
+        if (moodData.length > 0) {
+            const thisWeekData = moodData.slice(-7);
+            const averageScore = thisWeekData.reduce((sum, e) => sum + e.score, 0) / thisWeekData.length;
+            const mostCommonMood = getMostCommonMood(thisWeekData);
+            const lastWeekData = moodData.slice(-14, -7);
+            const lastWeekAvg = lastWeekData.length > 0
+                ? lastWeekData.reduce((sum, e) => sum + e.score, 0) / lastWeekData.length : 0;
+            const improvement = lastWeekAvg > 0
+                ? ((averageScore - lastWeekAvg) / lastWeekAvg * 100).toFixed(0) : 0;
+            updateMoodAnalytics(averageScore, mostCommonMood, improvement);
+        }
+        return;
+    }
+
+    try {
+        const response = await fetch(API_ENDPOINTS.mood.analytics, {
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+        });
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.analytics) {
+                const a = data.analytics;
+                updateMoodAnalytics(a.average_score, a.most_common_mood, a.weekly_improvement);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load mood analytics:', error);
     }
 }
 
@@ -1167,24 +1252,52 @@ function getMostCommonMood(moodData) {
 
 // Update mood analytics
 function updateMoodAnalytics(averageScore, mostCommonMood, improvement) {
+    const moodLabels = {
+        'very-sad': 'Very Sad', 'sad': 'Sad',
+        'neutral': 'Neutral', 'good': 'Good', 'very-good': 'Very Good'
+    };
+    const moodIcons = {
+        'very-sad': 'fa-sad-cry', 'sad': 'fa-frown',
+        'neutral': 'fa-meh', 'good': 'fa-smile', 'very-good': 'fa-grin-stars'
+    };
+
     const scoreValue = document.querySelector('.score-value');
-    const commonMoodElement = document.querySelector('.common-mood span');
+    const scoreLabel = document.querySelector('.score-label');
+    const commonMoodEl = document.querySelector('.common-mood span');
+    const commonMoodIcon = document.querySelector('.common-mood i');
     const improvementValue = document.querySelector('.improvement-value');
-    
-    if (scoreValue) scoreValue.textContent = averageScore.toFixed(1);
-    if (commonMoodElement) {
-        const moodLabels = {
-            'very-sad': 'Very Sad',
-            'sad': 'Sad',
-            'neutral': 'Neutral',
-            'good': 'Good',
-            'very-good': 'Very Good'
-        };
-        commonMoodElement.textContent = moodLabels[mostCommonMood] || 'Good';
+    const improvementLabel = document.querySelector('.improvement-label');
+
+    if (scoreValue) scoreValue.textContent = (averageScore !== null && averageScore !== undefined) ? Number(averageScore).toFixed(1) : '—';
+
+    if (scoreLabel) {
+        const s = Number(averageScore);
+        // Scores: very-sad=2, sad=4, neutral=6, good=8, very-good=10
+        const label = (!averageScore) ? '—' : s >= 9 ? 'Very Good' : s >= 7 ? 'Good' : s >= 5 ? 'Neutral' : s >= 3 ? 'Sad' : 'Very Sad';
+        scoreLabel.textContent = label;
     }
+
+    if (commonMoodEl) commonMoodEl.textContent = moodLabels[mostCommonMood] || '—';
+    if (commonMoodIcon) {
+        if (mostCommonMood) {
+            commonMoodIcon.className = `fas ${moodIcons[mostCommonMood] || 'fa-smile'}`;
+            commonMoodIcon.style.display = '';
+        } else {
+            commonMoodIcon.style.display = 'none';
+        }
+    }
+
     if (improvementValue) {
-        improvementValue.textContent = `${improvement > 0 ? '+' : ''}${improvement}%`;
+        const imp = Number(improvement);
+        if (improvement === null || improvement === undefined) {
+            improvementValue.textContent = '—';
+            improvementValue.style.color = '';
+        } else {
+            improvementValue.textContent = `${imp > 0 ? '+' : ''}${imp}%`;
+            improvementValue.style.color = imp > 0 ? '#06d6a0' : imp < 0 ? '#ff6b6b' : '';
+        }
     }
+    if (improvementLabel) improvementLabel.textContent = 'from last week';
 }
 
 // Setup meditation features
@@ -1316,7 +1429,7 @@ function startMeditation() {
         
         // Add to activities
         setTimeout(() => {
-            const activities = JSON.parse(localStorage.getItem('healhope_activities') || '[]');
+            const activities = JSON.parse(localStorage.getItem('mindwell_activities') || '[]');
             activities.unshift({
                 id: Date.now(),
                 type: 'meditation',
@@ -1324,7 +1437,7 @@ function startMeditation() {
                 timestamp: new Date().toISOString(),
                 icon: 'fas fa-meditation'
             });
-            localStorage.setItem('healhope_activities', JSON.stringify(activities.slice(0, 10)));
+            localStorage.setItem('mindwell_activities', JSON.stringify(activities.slice(0, 10)));
         }, 10000); // Add after 10 seconds for demo
         
     } else {
@@ -1367,7 +1480,7 @@ function setupCharts() {
 // Load user data
 function loadUserData() {
     // Load user-specific data and preferences
-    const userPreferences = JSON.parse(localStorage.getItem(`healhope_preferences_${currentUser?.id}`) || '{}');
+    const userPreferences = JSON.parse(localStorage.getItem(`mindwell_preferences_${currentUser?.id}`) || '{}');
     
     // Apply preferences if any
     if (userPreferences.theme) {
@@ -1377,17 +1490,122 @@ function loadUserData() {
 
 // Utility function for time ago
 function getTimeAgo(dateString) {
+    if (!dateString) return 'Recently';
     const date = new Date(dateString);
+    if (isNaN(date.getTime())) return 'Recently';
     const now = new Date();
     const diffInSeconds = Math.floor((now - date) / 1000);
-
     if (diffInSeconds < 60) return 'Just now';
-    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)} minutes ago`;
-    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)} hours ago`;
-    if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)} days ago`;
-    
+    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
+    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
+    if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d ago`;
     return date.toLocaleDateString();
 }
+
+// ── Web Push Notification System ─────────────────────────────────────────────
+
+let _swRegistration = null;
+
+async function initPushNotifications() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+
+    try {
+        _swRegistration = await navigator.serviceWorker.register('/service-worker.js');
+        console.log('Service Worker registered');
+
+        // Listen for SW messages (e.g. reminder clicked → switch to goals tab)
+        navigator.serviceWorker.addEventListener('message', event => {
+            if (event.data?.type === 'REMINDER_CLICK') {
+                switchTab('goals');
+            }
+        });
+
+        // If user is real and logged in, subscribe and request reminders
+        if (!isDemoMode && isLoggedIn) {
+            await subscribeToPush();
+            requestGoalReminders();   // non-blocking
+        }
+
+    } catch (err) {
+        console.warn('Service Worker registration failed:', err);
+    }
+}
+
+async function subscribeToPush() {
+    if (!_swRegistration && 'serviceWorker' in navigator) {
+        _swRegistration = await navigator.serviceWorker.ready;
+    }
+    if (!_swRegistration) return;
+
+    // Already subscribed?
+    let sub = await _swRegistration.pushManager.getSubscription();
+    if (sub) {
+        await sendSubscriptionToBackend(sub);
+        return;
+    }
+
+    // Request permission
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') return;
+
+    // Fetch VAPID public key
+    let vapidKey;
+    try {
+        const res = await fetch(`${API_BASE_URL}/users/push/vapid-public-key/`);
+        const data = await res.json();
+        vapidKey = data.publicKey;
+    } catch { return; }
+
+    if (!vapidKey) return;
+
+    // Subscribe
+    try {
+        sub = await _swRegistration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(vapidKey)
+        });
+        await sendSubscriptionToBackend(sub);
+    } catch (err) {
+        console.warn('Push subscription failed:', err);
+    }
+}
+
+async function sendSubscriptionToBackend(sub) {
+    const key  = sub.getKey('p256dh');
+    const auth = sub.getKey('auth');
+    try {
+        await fetch(`${API_BASE_URL}/users/push/subscribe/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({
+                endpoint: sub.endpoint,
+                p256dh: btoa(String.fromCharCode(...new Uint8Array(key))),
+                auth:   btoa(String.fromCharCode(...new Uint8Array(auth)))
+            })
+        });
+    } catch (err) {
+        console.warn('Failed to send subscription to backend:', err);
+    }
+}
+
+async function requestGoalReminders() {
+    try {
+        await fetch(`${API_BASE_URL}/users/push/send-reminders/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+        });
+    } catch { /* non-critical */ }
+}
+
+// Helper: base64url → Uint8Array (required by PushManager.subscribe)
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw     = atob(base64);
+    return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+// ── End Web Push ──────────────────────────────────────────────────────────────
 
 // Show notification
 function showNotification(message, type = 'info') {
@@ -1439,15 +1657,14 @@ function loadMeditationData() {
     // Skip backend calls in demo mode or if not authenticated
     if (isDemoMode || !isLoggedIn) {
         console.log('Loading meditation data in demo/offline mode');
-        const meditationStats = JSON.parse(localStorage.getItem('healhope_meditation_stats') || '{}');
+        const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
         updateMeditationStats(meditationStats);
         return;
     }
     
     // Load meditation data from backend with error handling
     fetch(API_ENDPOINTS.meditation.stats, {
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
     })
     .then(response => {
         if (response.ok) {
@@ -1461,18 +1678,18 @@ function loadMeditationData() {
     })
     .then(data => {
         if (data && data.success) {
-            localStorage.setItem('healhope_meditation_stats', JSON.stringify(data.stats));
+            localStorage.setItem('mindwell_meditation_stats', JSON.stringify(data.stats));
             updateMeditationStats(data.stats);
         } else {
             // Fallback to local data
-            const meditationStats = JSON.parse(localStorage.getItem('healhope_meditation_stats') || '{}');
+            const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
             updateMeditationStats(meditationStats);
         }
     })
     .catch(error => {
         console.error('Error loading meditation data:', error);
         // Fallback to local data without redirecting
-        const meditationStats = JSON.parse(localStorage.getItem('healhope_meditation_stats') || '{}');
+        const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
         updateMeditationStats(meditationStats);
     });
 }
@@ -1481,15 +1698,14 @@ function loadAppointmentsData() {
     // Skip backend calls in demo mode or if not authenticated
     if (isDemoMode || !isLoggedIn) {
         console.log('Loading appointments data in demo/offline mode');
-        const appointments = JSON.parse(localStorage.getItem('healhope_appointments') || '[]');
+        const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
         updateAppointmentsList(appointments);
         return;
     }
     
     // Load appointments from backend with error handling
     fetch(API_ENDPOINTS.appointments.list, {
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
     })
     .then(response => {
         if (response.ok) {
@@ -1502,45 +1718,672 @@ function loadAppointmentsData() {
     })
     .then(data => {
         if (data && data.success) {
-            localStorage.setItem('healhope_appointments', JSON.stringify(data.appointments));
+            localStorage.setItem('mindwell_appointments', JSON.stringify(data.appointments));
             updateAppointmentsList(data.appointments);
         } else {
-            const appointments = JSON.parse(localStorage.getItem('healhope_appointments') || '[]');
+            const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
             updateAppointmentsList(appointments);
         }
     })
     .catch(error => {
         console.error('Error loading appointments:', error);
-        const appointments = JSON.parse(localStorage.getItem('healhope_appointments') || '[]');
+        const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
         updateAppointmentsList(appointments);
     });
 }
 
-function loadCommunityData() {
-    // Skip backend calls in demo mode or if not authenticated  
+let _currentRedditSub = 'mentalhealth';
+
+async function loadCommunityData() {
+    connectCommunitySocket();
+    // Live feed loads first by default; other panels load on demand
+    loadRedditFeed(_currentRedditSub);
+    loadSupportGroups();
+    _loadCommunityPosts();
+}
+
+async function _loadCommunityPosts() {
     if (isDemoMode || !isLoggedIn) {
-        console.log('Loading community data in demo/offline mode');
-        const posts = JSON.parse(localStorage.getItem('healhope_community_posts') || '[]');
-        updateCommunityFeed(posts);
+        initializeCommunity();
+        const posts = JSON.parse(localStorage.getItem('mindwell_community_posts') || '[]');
+        updateCommunityFeed(posts.map(p => ({
+            id: p.id, content: p.content, category: p.category, author: p.author,
+            author_id: null, is_anonymous: p.isAnonymous || false,
+            like_count: p.likes || 0, is_liked: false,
+            created_at: p.timestamp || new Date().toISOString(),
+        })));
         return;
     }
-    
-    // Community data is typically local for now, but add error handling for future backend integration
-    const posts = JSON.parse(localStorage.getItem('healhope_community_posts') || '[]');
-    updateCommunityFeed(posts);
+    try {
+        const resp = await fetch(API_ENDPOINTS.community.posts, {
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.success) { updateCommunityFeed(data.posts); return; }
+        }
+    } catch (e) { console.error('Failed to load community posts:', e); }
+    const posts = JSON.parse(localStorage.getItem('mindwell_community_posts') || '[]');
+    updateCommunityFeed(posts.map(p => ({
+        id: p.id, content: p.content, category: p.category, author: p.author,
+        author_id: null, is_anonymous: p.isAnonymous || false,
+        like_count: p.likes || 0, is_liked: false,
+        created_at: p.timestamp || new Date().toISOString(),
+    })));
+}
+
+// ── Community view switcher ───────────────────────────────────────────────────
+
+function switchCommunityView(view, btn) {
+    document.querySelectorAll('.comm-nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.comm-panel').forEach(p => p.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    const panel = document.getElementById(`comm-panel-${view}`);
+    if (panel) panel.classList.add('active');
+}
+
+// ── Reddit Live Feed ──────────────────────────────────────────────────────────
+
+async function loadRedditFeed(sub, btn) {
+    _currentRedditSub = sub || _currentRedditSub;
+
+    // update pill active state
+    if (btn) {
+        document.querySelectorAll('.sub-pill').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+    }
+
+    const container = document.getElementById('reddit-posts-container');
+    if (!container) return;
+
+    container.innerHTML = `
+        <div class="reddit-loading">
+            <div class="reddit-spinner"></div>
+            <p>Loading r/${_currentRedditSub}…</p>
+        </div>`;
+
+    const refreshBtn = document.getElementById('redditRefreshBtn');
+    if (refreshBtn) refreshBtn.classList.add('spinning');
+
+    try {
+        const resp = await fetch(API_ENDPOINTS.community.redditFeed(_currentRedditSub), {
+            headers: { ...getAuthHeaders() }
+        });
+        const data = await resp.json();
+
+        if (data.success && data.posts.length > 0) {
+            container.innerHTML = '';
+            const grid = document.createElement('div');
+            grid.className = 'reddit-posts-grid';
+            data.posts.forEach(post => grid.appendChild(buildRedditCard(post)));
+            container.appendChild(grid);
+        } else {
+            container.innerHTML = `<div class="reddit-empty">
+                <i class="fab fa-reddit-alien"></i>
+                <p>Couldn't load posts right now. Try refreshing.</p>
+            </div>`;
+        }
+    } catch (e) {
+        container.innerHTML = `<div class="reddit-empty">
+            <i class="fas fa-wifi"></i>
+            <p>Network error. Check your connection and try again.</p>
+        </div>`;
+    } finally {
+        if (refreshBtn) refreshBtn.classList.remove('spinning');
+    }
+}
+
+function refreshRedditFeed() {
+    loadRedditFeed(_currentRedditSub);
+}
+
+function buildRedditCard(post) {
+    const card = document.createElement('div');
+    card.className = 'reddit-card';
+
+    const age = _redditAge(post.created_utc);
+    const flair = post.flair ? `<span class="reddit-flair">${escapeHtml(post.flair)}</span>` : '';
+    const excerpt = post.text
+        ? `<p class="reddit-excerpt">${escapeHtml(post.text.substring(0, 220))}${post.text.length > 220 ? '…' : ''}</p>`
+        : '';
+    const upvotes = post.upvotes >= 1000
+        ? `${(post.upvotes / 1000).toFixed(1)}k`
+        : post.upvotes;
+
+    card.innerHTML = `
+        <div class="reddit-card-top">
+            <div class="reddit-sub-badge">
+                <i class="fab fa-reddit-alien"></i> r/${escapeHtml(post.subreddit)}
+            </div>
+            ${flair}
+            <span class="reddit-age">${age}</span>
+        </div>
+        <h3 class="reddit-title">${escapeHtml(post.title)}</h3>
+        ${excerpt}
+        <div class="reddit-card-footer">
+            <div class="reddit-stats">
+                <span><i class="fas fa-arrow-up"></i> ${upvotes}</span>
+                <span><i class="fas fa-comment-alt"></i> ${post.comments}</span>
+            </div>
+            <a href="${post.url}" target="_blank" rel="noopener noreferrer" class="reddit-read-link">
+                Read thread <i class="fas fa-external-link-alt"></i>
+            </a>
+        </div>
+    `;
+    return card;
+}
+
+function _redditAge(utc) {
+    const diff = Math.floor(Date.now() / 1000) - utc;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+}
+
+// ── Community WebSocket ──────────────────────────────────────────────────────
+
+function connectCommunitySocket() {
+    if (communitySocket && communitySocket.readyState === WebSocket.OPEN) return;
+    if (isDemoMode || !isLoggedIn) return;
+
+    const _token = localStorage.getItem('authToken') || '';
+    const wsUrl = `${CHAT_WS_URL}/ws/community/${_token ? '?token=' + encodeURIComponent(_token) : ''}`;
+    try {
+        communitySocket = new WebSocket(wsUrl);
+
+        communitySocket.onopen = () => {
+            console.log('Community WebSocket connected');
+            clearTimeout(communityReconnectTimer);
+        };
+
+        communitySocket.onmessage = (evt) => {
+            try {
+                const data = JSON.parse(evt.data);
+                if (data.type === 'new_post') {
+                    prependCommunityPost(data.post);
+                } else if (data.type === 'post_liked') {
+                    updatePostLikeCount(data.post_id, data.like_count);
+                }
+            } catch (e) {
+                console.error('Community WS message error:', e);
+            }
+        };
+
+        communitySocket.onclose = () => {
+            console.log('Community WebSocket closed');
+            communitySocket = null;
+            communityReconnectTimer = setTimeout(connectCommunitySocket, 5000);
+        };
+
+        communitySocket.onerror = (e) => {
+            console.error('Community WebSocket error:', e);
+        };
+    } catch (e) {
+        console.error('Failed to open community WebSocket:', e);
+    }
+}
+
+function disconnectCommunitySocket() {
+    clearTimeout(communityReconnectTimer);
+    if (communitySocket) {
+        communitySocket.close();
+        communitySocket = null;
+    }
+}
+
+function prependCommunityPost(post) {
+    const feed = document.querySelector('.posts-feed');
+    if (!feed) return;
+    const card = buildPostCard(post);
+    feed.insertBefore(card, feed.firstChild);
+}
+
+// ── Support Groups (Real Online Communities) ──────────────────────────────────
+
+const REAL_SUPPORT_GROUPS = [
+    {
+        name: 'r/mentalhealth',
+        platform: 'Reddit',
+        icon: 'fab fa-reddit-alien',
+        color: '#FF4500',
+        bg: '#fff5f0',
+        description: 'General mental health community — share experiences, coping strategies, and peer support.',
+        members: '1.5M+',
+        tag: 'General',
+        category: 'reddit',
+        url: 'https://www.reddit.com/r/mentalhealth/',
+    },
+    {
+        name: 'r/anxiety',
+        platform: 'Reddit',
+        icon: 'fab fa-reddit-alien',
+        color: '#FF4500',
+        bg: '#fff5f0',
+        description: 'Support community for anxiety disorders, panic attacks, and day-to-day coping.',
+        members: '700K+',
+        tag: 'Anxiety',
+        category: 'reddit',
+        url: 'https://www.reddit.com/r/Anxiety/',
+    },
+    {
+        name: 'r/depression',
+        platform: 'Reddit',
+        icon: 'fab fa-reddit-alien',
+        color: '#FF4500',
+        bg: '#fff5f0',
+        description: 'A safe space for people experiencing depression to share, vent, and find support.',
+        members: '900K+',
+        tag: 'Depression',
+        category: 'reddit',
+        url: 'https://www.reddit.com/r/depression/',
+    },
+    {
+        name: 'r/IndianMentalHealth',
+        platform: 'Reddit',
+        icon: 'fab fa-reddit-alien',
+        color: '#FF4500',
+        bg: '#fff5f0',
+        description: 'Mental health discussions in the Indian cultural context — family, stigma, therapy access.',
+        members: '50K+',
+        tag: 'India',
+        category: 'india',
+        url: 'https://www.reddit.com/r/IndianMentalHealth/',
+    },
+    {
+        name: '7 Cups',
+        platform: 'Peer Support',
+        icon: 'fas fa-mug-hot',
+        color: '#16a34a',
+        bg: '#f0fdf4',
+        description: 'Free 24/7 emotional support from trained volunteer listeners. Over 50 million conversations.',
+        members: '50M+ served',
+        tag: 'Free · 24/7',
+        category: 'peer',
+        url: 'https://www.7cups.com/',
+    },
+    {
+        name: 'The Mighty',
+        platform: 'Community',
+        icon: 'fas fa-hands-helping',
+        color: '#6366f1',
+        bg: '#eef2ff',
+        description: 'Community for people facing mental and physical health challenges. Stories, groups & forums.',
+        members: '3M+',
+        tag: 'Stories · Forums',
+        category: 'peer',
+        url: 'https://themighty.com/',
+    },
+    {
+        name: 'iCall India',
+        platform: 'India',
+        icon: 'fas fa-heart',
+        color: '#dc2626',
+        bg: '#fef2f2',
+        description: 'Psychosocial helpline by TISS Mumbai. Resources, blogs, and professional counselling.',
+        members: 'Free',
+        tag: 'India · Counselling',
+        category: 'india',
+        url: 'https://icallhelpline.org/',
+    },
+    {
+        name: 'Mann Talks',
+        platform: 'India',
+        icon: 'fas fa-comment-dots',
+        color: '#d97706',
+        bg: '#fffbeb',
+        description: "India's mental wellness community for open conversations on stress, anxiety, and self-care.",
+        members: '100K+',
+        tag: 'India · Wellness',
+        category: 'india',
+        url: 'https://manntalks.org/',
+    },
+    {
+        name: 'White Swan Foundation',
+        platform: 'India',
+        icon: 'fas fa-dove',
+        color: '#0284c7',
+        bg: '#f0f9ff',
+        description: 'India-focused mental health education, caregiver support groups, and awareness resources.',
+        members: 'Open',
+        tag: 'India · Education',
+        category: 'india',
+        url: 'https://www.whiteswan.org.in/',
+    },
+    {
+        name: 'Vandrevala Foundation',
+        platform: 'India',
+        icon: 'fas fa-phone-alt',
+        color: '#7c3aed',
+        bg: '#f5f3ff',
+        description: '24/7 free mental health helpline and online resources. India-wide. Multilingual support.',
+        members: 'Free · 24/7',
+        tag: 'India · Helpline',
+        category: 'india',
+        url: 'https://vandrevalafoundation.com/',
+    },
+];
+
+function loadSupportGroups() {
+    const container = document.getElementById('groupList');
+    if (!container) return;
+    renderRealGroups(container, 'all');
+}
+
+function renderRealGroups(container, category) {
+    const groups = category === 'all'
+        ? REAL_SUPPORT_GROUPS
+        : REAL_SUPPORT_GROUPS.filter(g => g.category === category);
+
+    container.innerHTML = '';
+    groups.forEach(g => {
+        const card = document.createElement('div');
+        card.className = 'group-card real-group-card';
+        card.dataset.category = g.category;
+        card.innerHTML = `
+            <div class="group-header" style="align-items:flex-start;gap:12px;">
+                <div style="width:40px;height:40px;border-radius:10px;background:${g.bg};display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+                    <i class="${g.icon}" style="color:${g.color};font-size:18px;"></i>
+                </div>
+                <div style="flex:1;min-width:0;">
+                    <h3 style="margin:0 0 2px;font-size:15px;">${g.name}</h3>
+                    <span class="group-type" style="background:${g.bg};color:${g.color};border:none;">${g.tag}</span>
+                </div>
+            </div>
+            <p style="margin:10px 0;color:#64748b;font-size:13.5px;line-height:1.5;">${g.description}</p>
+            <div class="group-meta" style="margin-bottom:12px;">
+                <span><i class="fas fa-users"></i> ${g.members}</span>
+                <span style="color:${g.color};font-weight:500;"><i class="fas fa-external-link-alt" style="font-size:11px;"></i> ${g.platform}</span>
+            </div>
+            <div class="group-actions">
+                <a href="${g.url}" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;">
+                    Visit Community <i class="fas fa-arrow-right" style="font-size:12px;"></i>
+                </a>
+            </div>
+        `;
+        container.appendChild(card);
+    });
+}
+
+function filterGroups(category, btn) {
+    document.querySelectorAll('.group-filter-btn').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    const container = document.getElementById('groupList');
+    if (container) renderRealGroups(container, category);
+}
+
+// ── Group Chat ────────────────────────────────────────────────────────────────
+
+function openGroupChat(groupId, groupName) {
+    const existing = document.getElementById('groupChatModal');
+    if (existing) existing.remove();
+    if (groupChatSocket) { groupChatSocket.close(); groupChatSocket = null; }
+
+    activeGroupChatId = groupId;
+
+    document.body.insertAdjacentHTML('beforeend', `
+        <div id="groupChatModal" class="chat-modal-overlay">
+            <div class="chat-modal-container">
+                <div class="crisis-chat-container">
+                    <div class="chat-header">
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <i class="fas fa-users" style="color:#6366f1;font-size:18px;"></i>
+                            <span style="font-weight:700;color:#0f172a;font-size:15px;">${escapeHtml(groupName)}</span>
+                        </div>
+                        <button class="close-btn" onclick="closeGroupChat()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="chat-messages" id="groupChatMessages">
+                        <div class="chat-message system" style="justify-content:center;">
+                            <div class="message-content" style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:12px 16px;text-align:center;max-width:320px;">
+                                <p style="margin:0;color:#0369a1;font-size:13px;"><i class="fas fa-lock" style="margin-right:6px;"></i>Messages are live — not saved after you close.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="chat-input-container">
+                        <div class="input-wrapper">
+                            <input type="text" id="groupChatInput" placeholder="Say something to the group..." maxlength="500" disabled>
+                            <button class="send-btn" id="groupSendBtn" onclick="sendGroupMessage()" disabled>
+                                <div class="btn-content"><i class="fas fa-paper-plane"></i></div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `);
+
+    document.getElementById('groupChatInput').addEventListener('keypress', e => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGroupMessage(); }
+    });
+
+    connectGroupChatSocket(groupId);
+}
+
+function closeGroupChat() {
+    if (groupChatSocket) { groupChatSocket.close(); groupChatSocket = null; }
+    activeGroupChatId = null;
+    const modal = document.getElementById('groupChatModal');
+    if (modal) modal.remove();
+}
+
+function connectGroupChatSocket(groupId) {
+    const _token = localStorage.getItem('authToken') || '';
+    const wsUrl = `${CHAT_WS_URL}/ws/community/group/${groupId}/${_token ? '?token=' + encodeURIComponent(_token) : ''}`;
+    try {
+        groupChatSocket = new WebSocket(wsUrl);
+
+        groupChatSocket.onopen = () => {
+            const input = document.getElementById('groupChatInput');
+            const btn = document.getElementById('groupSendBtn');
+            if (input) input.disabled = false;
+            if (btn) btn.disabled = false;
+        };
+
+        groupChatSocket.onmessage = (evt) => {
+            try {
+                const data = JSON.parse(evt.data);
+                if (data.type === 'message') appendGroupMessage(data.message);
+            } catch (e) { console.error('Group chat WS parse error:', e); }
+        };
+
+        groupChatSocket.onclose = () => {
+            groupChatSocket = null;
+            appendGroupSystemNote('Disconnected from group chat.');
+        };
+
+        groupChatSocket.onerror = () => {
+            appendGroupSystemNote('Could not connect. Check your connection.');
+        };
+    } catch (e) {
+        appendGroupSystemNote('WebSocket not available.');
+    }
+}
+
+function sendGroupMessage() {
+    const input = document.getElementById('groupChatInput');
+    const msg = (input?.value || '').trim();
+    if (!msg) return;
+
+    if (groupChatSocket && groupChatSocket.readyState === WebSocket.OPEN) {
+        groupChatSocket.send(JSON.stringify({ message: msg }));
+        input.value = '';
+    } else {
+        showNotification('Not connected to group chat.', 'error');
+    }
+}
+
+function appendGroupMessage(msg) {
+    const container = document.getElementById('groupChatMessages');
+    if (!container) return;
+
+    const isOwn = msg.sender_id === (currentUser?.id || currentUser?.username);
+    const div = document.createElement('div');
+    div.className = `chat-message ${isOwn ? 'user' : 'bot'}`;
+    const time = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const initial = (msg.sender || '?').charAt(0).toUpperCase();
+
+    if (isOwn) {
+        div.innerHTML = `
+            <div class="message-content">
+                <p>${escapeHtml(msg.content)}</p>
+                <span class="message-time">${time}</span>
+            </div>
+            <div class="message-avatar"><i class="fas fa-user"></i></div>
+        `;
+    } else {
+        div.innerHTML = `
+            <div class="message-avatar" style="background:#6366f1;color:#fff;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;flex-shrink:0;">${escapeHtml(initial)}</div>
+            <div class="message-content">
+                <div class="message-header">
+                    <span class="sender-name" style="font-size:12px;font-weight:600;color:#6366f1;">${escapeHtml(msg.sender)}</span>
+                    <span class="message-time">${time}</span>
+                </div>
+                <p>${escapeHtml(msg.content)}</p>
+            </div>
+        `;
+    }
+
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+}
+
+function appendGroupSystemNote(text) {
+    const container = document.getElementById('groupChatMessages');
+    if (!container) return;
+    const div = document.createElement('div');
+    div.className = 'chat-message system';
+    div.style.justifyContent = 'center';
+    div.innerHTML = `<div class="message-content" style="background:#fef9c3;border-radius:8px;padding:8px 14px;font-size:12px;color:#92400e;">${escapeHtml(text)}</div>`;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+}
+
+function updatePostLikeCount(postId, likeCount) {
+    const btn = document.querySelector(`.post-card[data-post-id="${postId}"] .like-btn`);
+    if (btn) btn.innerHTML = `<i class="fas fa-heart"></i> ${likeCount}`;
+}
+
+// ── Submit a new community post ──────────────────────────────────────────────
+
+async function submitCommunityPost() {
+    const textarea = document.getElementById('communityPostText');
+    const categoryEl = document.getElementById('communityPostCategory');
+    if (!textarea) return;
+
+    const content = textarea.value.trim();
+    if (!content) { showNotification('Please write something before posting.', 'error'); return; }
+    if (content.length > 1000) { showNotification('Post is too long (max 1000 characters).', 'error'); return; }
+
+    const categoryLabel = categoryEl ? categoryEl.value : 'General Support';
+    const categoryMap = {
+        'General Support': 'general', 'Success Story': 'success',
+        'Question': 'question', 'Resource Share': 'resource',
+    };
+    const category = categoryMap[categoryLabel] || 'general';
+
+    if (isDemoMode || !isLoggedIn) {
+        // Local-only demo post
+        const posts = JSON.parse(localStorage.getItem('mindwell_community_posts') || '[]');
+        const newPost = {
+            id: Date.now(),
+            author: currentUser?.firstName || 'You',
+            content,
+            category: categoryLabel,
+            likes: 0,
+            comments: 0,
+            timestamp: new Date().toISOString(),
+            isAnonymous: false,
+        };
+        posts.unshift(newPost);
+        localStorage.setItem('mindwell_community_posts', JSON.stringify(posts));
+        textarea.value = '';
+        loadCommunityData();
+        return;
+    }
+
+    // Try WebSocket first
+    if (communitySocket && communitySocket.readyState === WebSocket.OPEN) {
+        communitySocket.send(JSON.stringify({ type: 'new_post', content, category }));
+        textarea.value = '';
+        return;
+    }
+
+    // HTTP fallback
+    try {
+        const resp = await fetch(API_ENDPOINTS.community.posts, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({ content, category }),
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.success) {
+                textarea.value = '';
+                prependCommunityPost(data.post);
+                showNotification('Post shared!', 'success');
+                return;
+            }
+        }
+        showNotification('Failed to post. Please try again.', 'error');
+    } catch (e) {
+        console.error('submitCommunityPost error:', e);
+        showNotification('Network error. Please try again.', 'error');
+    }
+}
+
+// ── Like a community post ────────────────────────────────────────────────────
+
+async function likePost(postId) {
+    if (isDemoMode || !isLoggedIn) {
+        // Demo: mutate localStorage
+        const posts = JSON.parse(localStorage.getItem('mindwell_community_posts') || '[]');
+        const post = posts.find(p => p.id === postId);
+        if (post) {
+            post.likes = (post.likes || 0) + 1;
+            localStorage.setItem('mindwell_community_posts', JSON.stringify(posts));
+            updatePostLikeCount(postId, post.likes);
+        }
+        return;
+    }
+
+    // Try WebSocket
+    if (communitySocket && communitySocket.readyState === WebSocket.OPEN) {
+        communitySocket.send(JSON.stringify({ type: 'like_post', post_id: postId }));
+        return;
+    }
+
+    // HTTP fallback
+    try {
+        const resp = await fetch(API_ENDPOINTS.community.like(postId), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.success) {
+                updatePostLikeCount(postId, data.like_count);
+                // Toggle heart colour
+                const btn = document.querySelector(`.post-card[data-post-id="${postId}"] .like-btn`);
+                if (btn) btn.classList.toggle('liked', data.liked);
+            }
+        }
+    } catch (e) {
+        console.error('likePost error:', e);
+    }
 }
 
 function loadResourcesData() {
     // Skip backend calls in demo mode or if not authenticated
     if (isDemoMode || !isLoggedIn) {
         console.log('Loading resources data in demo/offline mode');
-        const resources = JSON.parse(localStorage.getItem('healhope_resources') || '[]');
+        const resources = JSON.parse(localStorage.getItem('mindwell_resources') || '[]');
         updateResourcesGrid(resources);
         return;
     }
     
     // Resources are typically local for now, but add error handling for future backend integration
-    const resources = JSON.parse(localStorage.getItem('healhope_resources') || '[]');
+    const resources = JSON.parse(localStorage.getItem('mindwell_resources') || '[]');
     updateResourcesGrid(resources);
 }
 
@@ -1548,19 +2391,13 @@ function loadGoalsData() {
     // Skip backend calls in demo mode or if not authenticated
     if (isDemoMode || !isLoggedIn) {
         console.log('Loading goals data in demo/offline mode');
-        const goals = JSON.parse(localStorage.getItem('healhope_goals') || '[]');
-        const goalsList = document.querySelector('.goal-list');
-        if (goalsList) {
-            // Use existing loadGoalsData logic but with local data
-            loadGoalsDataLocal();
-        }
+        loadGoalsDataLocal();
         return;
     }
     
     // Load goals from backend with error handling
     fetch(API_ENDPOINTS.goals.list, {
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
     })
     .then(response => {
         if (response.ok) {
@@ -1572,9 +2409,10 @@ function loadGoalsData() {
         throw new Error('Failed to load goals');
     })
     .then(data => {
-        if (data && data.success) {
-            localStorage.setItem('healhope_goals', JSON.stringify(data.goals));
-            loadGoalsDataLocal();
+        // Router list returns a plain array; goals_list view wraps in {success, goals}
+        const goals = Array.isArray(data) ? data : (data && data.goals) ? data.goals : null;
+        if (goals) {
+            renderGoalsList(goals);
         } else {
             loadGoalsDataLocal();
         }
@@ -1586,46 +2424,38 @@ function loadGoalsData() {
 }
 
 function loadJournalData() {
-    // Skip backend calls in demo mode or if not authenticated
-    if (isDemoMode || !isLoggedIn) {
-        console.log('Loading journal data in demo/offline mode');
-        loadJournalDataLocal();
-        return;
-    }
-    
-    // Load journal from backend with error handling
+    // Always render from localStorage immediately (instant)
+    loadJournalDataLocal();
+
+    // Skip backend fetch if demo, not logged in, or cache is fresh (2 min TTL)
+    if (isDemoMode || !isLoggedIn || cacheGet('journalData', 120000)) return;
+
+    // Background sync with backend — filter deleted entries before storing
     fetch(API_ENDPOINTS.journal.entries, {
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
     })
-    .then(response => {
-        if (response.ok) {
-            return response.json();
-        } else if (response.status === 401 || response.status === 403) {
-            console.log('Auth error loading journal, using local data');
-            return null;
-        }
-        throw new Error('Failed to load journal');
-    })
+    .then(r => r.ok ? r.json() : null)
     .then(data => {
-        if (data && data.success) {
-            localStorage.setItem('healhope_journal_entries', JSON.stringify(data.entries));
-            loadJournalDataLocal();
-        } else {
+        if (data?.success && Array.isArray(data.entries)) {
+            const deletedDates = getDeletedJournalDates();
+            const filtered = data.entries.filter(e =>
+                !deletedDates.includes((e.date || '').substring(0, 10))
+            );
+            const key = getUserSpecificKey('mindwell_journal_entries');
+            localStorage.setItem(key, JSON.stringify(filtered));
+            cacheSet('journalData', true);
             loadJournalDataLocal();
         }
     })
-    .catch(error => {
-        console.error('Error loading journal:', error);
-        loadJournalDataLocal();
-    });
+    .catch(() => {});
 }
 
 // Helper functions for local data loading
 function loadGoalsDataLocal() {
-    const goalsKey = getUserSpecificKey('healhope_goals');
+    const goalsKey = getUserSpecificKey('mindwell_goals');
     const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
-    const goalsList = document.querySelector('.goal-list');
+    renderGoalsList(goals);
+    const goalsList = document.querySelector('.goal-list'); // kept for any legacy code below
     
     if (!goalsList) return;
     
@@ -1668,31 +2498,38 @@ function loadGoalsDataLocal() {
     });
 }
 
-function loadJournalDataLocal() {
-    const journalKey = getUserSpecificKey('healhope_journal_entries');
-    const entries = JSON.parse(localStorage.getItem(journalKey) || '[]');
+function renderJournalEntries(entries) {
     const entriesList = document.querySelector('.entries-list');
-    
     if (!entriesList) return;
-    
+
+    if (!entries.length) {
+        entriesList.innerHTML = '<p style="color:#94a3b8;text-align:center;padding:24px;">No entries found.</p>';
+        return;
+    }
+
     entriesList.innerHTML = '';
-    
-    entries.slice(0, 10).forEach(entry => {
-        const entryCard = document.createElement('div');
-        entryCard.className = 'entry-card';
-        entryCard.innerHTML = `
+    entries.slice(0, 20).forEach(entry => {
+        const s = entry.sentiment || analyzeSentiment(entry.content || '');
+        // Fix missing/wrong values
+        if (!entry.wordCount || entry.wordCount === 0)
+            entry.wordCount = (entry.content || '').split(/\s+/).filter(w => w).length;
+        if (!entry.createdAt) entry.createdAt = entry.date || new Date().toISOString();
+        const card = document.createElement('div');
+        card.className = 'entry-card';
+        card.innerHTML = `
             <div class="entry-header">
                 <h3>${entry.title}</h3>
                 <div class="entry-meta">
                     <span class="entry-mood">${getMoodEmoji(entry.mood)}</span>
                     <span class="entry-date">${formatDate(entry.date)}</span>
+                    <span style="background:${s.bg||'#f8fafc'};color:${s.color||'#475569'};font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;border:1px solid ${s.color||'#cbd5e1'}20;">${s.icon} ${s.label}</span>
                 </div>
             </div>
             <div class="entry-preview">
                 <p>${entry.content.substring(0, 150)}${entry.content.length > 150 ? '...' : ''}</p>
             </div>
             <div class="entry-tags">
-                ${entry.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}
+                ${(entry.tags || []).map(tag => `<span class="tag">${tag}</span>`).join('')}
             </div>
             <div class="entry-actions">
                 <button class="btn btn-outline btn-sm" onclick="editJournalEntry(${entry.id})">Edit</button>
@@ -1700,16 +2537,166 @@ function loadJournalDataLocal() {
                 <button class="btn btn-outline btn-sm" onclick="deleteJournalEntry(${entry.id})">Delete</button>
             </div>
             <div class="entry-stats">
-                <small>${entry.wordCount} words • ${getTimeAgo(entry.createdAt)}</small>
+                <small>${entry.wordCount || 0} words • ${getTimeAgo(entry.createdAt)}</small>
             </div>
         `;
-        entriesList.appendChild(entryCard);
+        entriesList.appendChild(card);
     });
+}
+
+function deduplicateJournalEntries() {
+    const entries = getJournalEntries();
+    const seen = {};
+    const deduped = [];
+    for (const e of entries) {
+        const day = (e.date || '').substring(0, 10);
+        if (!seen[day]) { seen[day] = true; deduped.push(e); }
+    }
+    if (deduped.length < entries.length) {
+        setJournalEntries(deduped);
+        return deduped;
+    }
+    return entries;
+}
+
+function loadJournalDataLocal() {
+    const entries = deduplicateJournalEntries();
+    renderJournalEntries(entries);
+    updateJournalStats();
+    updateSentimentSuggestions(entries);
+    renderTrendPanel(entries);
+
+    // Keep composer editingId in sync with today's entry
+    const today = localDateStr();
+    const todayEntry = entries.find(e => (e.date || '').substring(0, 10) === today);
+    const composer = document.querySelector('.journal-composer');
+    const saveBtn = document.querySelector('.save-actions .btn-primary');
+    const composerTitle = document.querySelector('.journal-composer h2');
+    if (composer) composer.dataset.editingId = todayEntry ? todayEntry.id : '';
+    if (saveBtn) saveBtn.textContent = todayEntry ? 'Update Entry' : 'Save Entry';
+    if (composerTitle) composerTitle.textContent = todayEntry ? "Today's Entry — Edit" : "Today's Entry";
+}
+
+function updateSentimentSuggestions(entries) {
+    const section = document.getElementById('journalSuggestions');
+    if (!section || !entries.length) return;
+
+    const latest = entries[0];
+    const s = latest.sentiment || analyzeSentiment(latest.content || '');
+
+    const suggestionMap = {
+        'Bright': {
+            title: 'You seem to be in a good space ☀️',
+            subtitle: 'Keep riding this wave',
+            text: "It looks like today's entry carries a light, uplifted energy. This is a great time to build on that momentum — whether it's tackling something you've been putting off, reaching out to someone you care about, or setting a small goal for tomorrow.",
+            actions: [
+                { label: '🎯 Set a Goal', tab: 'goals' },
+                { label: '🧘 Try Meditation', tab: 'meditation' },
+            ]
+        },
+        'Partly Cloudy': {
+            title: 'A balanced day ⛅',
+            subtitle: 'A little of everything',
+            text: "Your entry feels thoughtful and grounded — a mix of ups and downs. On days like these, a gentle routine can help bring more clarity. You might enjoy a short walk, a breathing exercise, or simply sitting quietly for a few minutes.",
+            actions: [
+                { label: '🌬️ Breathing Exercise', tab: 'meditation' },
+                { label: '📋 View Resources', tab: 'resources' },
+            ]
+        },
+        'Cloudy': {
+            title: 'It sounds like a heavy day 🌧️',
+            subtitle: 'You showed up — that matters',
+            text: "Writing about difficult moments takes courage. You don't have to have it all figured out right now. Consider trying one small thing that brings you comfort — a warm drink, a short walk, or talking to someone you trust. We're here if you need support.",
+            actions: [
+                { label: '💬 Crisis Support', tab: 'crisis' },
+                { label: '🌬️ Breathing Exercise', tab: 'meditation' },
+                { label: '📋 View Resources', tab: 'resources' },
+            ]
+        }
+    };
+
+    const config = suggestionMap[s.label] || suggestionMap['Partly Cloudy'];
+
+    document.getElementById('suggestionIcon').textContent = s.icon;
+    document.getElementById('suggestionTitle').textContent = config.title;
+    document.getElementById('suggestionSubtitle').textContent = config.subtitle;
+    document.getElementById('suggestionText').textContent = config.text;
+
+    const actionsEl = document.getElementById('suggestionActions');
+    actionsEl.innerHTML = config.actions.map(a => `
+        <button class="btn btn-outline btn-sm" onclick="switchTab('${a.tab}')" style="font-size:13px;">
+            ${a.label}
+        </button>
+    `).join('');
+
+    section.style.display = 'block';
+}
+
+function renderTrendPanel(entries) {
+    const panel = document.getElementById('journalTrendPanel');
+    const trendDays = document.getElementById('trendDays');
+    const trendSummary = document.getElementById('trendSummary');
+    if (!panel || !entries.length) return;
+
+    const today = new Date();
+    const days = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(today);
+        d.setDate(today.getDate() - (6 - i));
+        return localDateStr(d);
+    });
+
+    const dayLabels = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const entryByDate = {};
+    entries.forEach(e => { if (e.date) entryByDate[e.date] = e; });
+
+    const scores = days.map(d => entryByDate[d]?.sentiment?.score ?? null);
+    const written = scores.filter(s => s !== null).length;
+
+    trendDays.innerHTML = days.map((d, i) => {
+        const entry = entryByDate[d];
+        const score = scores[i];
+        const dayName = dayLabels[new Date(d + 'T12:00:00').getDay()];
+        const isToday = d === localDateStr(today);
+
+        let icon = '·', bg = '#f1f5f9', height = '24px', title = 'No entry';
+        if (score !== null) {
+            const s = entry.sentiment || analyzeSentiment(entry.content || '');
+            icon = s.icon;
+            bg = s.bg || '#f0f9ff';
+            height = `${Math.max(32, Math.min(80, 56 + score * 4))}px`;
+            title = s.label;
+        }
+
+        return `
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;" title="${title}">
+                <div style="background:${bg};border-radius:10px;width:100%;height:${height};display:flex;align-items:center;justify-content:center;font-size:18px;transition:height 0.3s;border:${isToday ? '2px solid #6366f1' : '1px solid #e2e8f0'};">
+                    ${score !== null ? icon : '<span style="color:#cbd5e1;font-size:12px;">—</span>'}
+                </div>
+                <span style="font-size:10px;color:${isToday ? '#6366f1' : '#94a3b8'};font-weight:${isToday ? '700' : '400'};">${dayName}</span>
+            </div>
+        `;
+    }).join('');
+
+    // Trend summary
+    const recentScores = scores.filter(s => s !== null);
+    let summaryText = `You've written ${written} out of the last 7 days.`;
+    if (recentScores.length >= 2) {
+        const first = recentScores[0];
+        const last = recentScores[recentScores.length - 1];
+        const diff = last - first;
+        if (diff >= 2) summaryText += ' Your entries are feeling lighter as the week goes on. ☀️';
+        else if (diff <= -2) summaryText += ' It\'s been a heavier week — remember, every day is a fresh start. 🌱';
+        else summaryText += ' Your energy has been steady this week. ⛅';
+    }
+
+    trendSummary.textContent = summaryText;
+    panel.style.display = 'block';
 }
 
 // Journal Management System
 function initializeJournal() {
-    if (!localStorage.getItem('healhope_journal_entries')) {
+    const journalKey = getUserSpecificKey('mindwell_journal_entries');
+    if (!localStorage.getItem(journalKey)) {
         const sampleEntries = [
             {
                 id: 1,
@@ -1717,9 +2704,10 @@ function initializeJournal() {
                 content: "Today I realized how much progress I've made over the past few months. The daily meditation is really helping me stay centered and focused. I'm grateful for the small wins.",
                 mood: "good",
                 tags: ["Progress", "Meditation", "Gratitude"],
-                date: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+                date: localDateStr(new Date(Date.now() - 86400000)),
                 wordCount: 45,
-                isPrivate: false
+                isPrivate: false,
+                createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
             },
             {
                 id: 2,
@@ -1727,22 +2715,77 @@ function initializeJournal() {
                 content: "Had a really tough day dealing with work stress. Feeling overwhelmed but trying to use the coping strategies I've learned. Tomorrow is a new day.",
                 mood: "sad",
                 tags: ["Work", "Stress", "Coping"],
-                date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+                date: localDateStr(new Date(Date.now() - 3*86400000)),
                 wordCount: 32,
-                isPrivate: true
+                isPrivate: true,
+                createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
             }
         ];
-        localStorage.setItem('healhope_journal_entries', JSON.stringify(sampleEntries));
+        localStorage.setItem(journalKey, JSON.stringify(sampleEntries));
     }
+
+    // Set today's date as default
+    const today = localDateStr();
+    const dateInput = document.getElementById('journalEntryDate');
+    if (dateInput) { dateInput.value = today; dateInput.max = today; }
+
+    // One entry per day — if today's entry exists, load it for editing
+    const todayEntry = getJournalEntries().find(e => (e.date || '').substring(0, 10) === today);
+    const composerTitle = document.querySelector('.journal-composer h2');
+    const saveBtn = document.querySelector('.save-actions .btn-primary');
+    if (todayEntry) {
+        if (composerTitle) composerTitle.textContent = "Today's Entry — Edit";
+        if (saveBtn) saveBtn.textContent = 'Update Entry';
+        document.querySelector('.entry-title').value = todayEntry.title.replace(/^\[Draft\] /, '');
+        document.querySelector('.journal-editor').value = todayEntry.content;
+        document.querySelector('.mood-select').value = todayEntry.mood || '';
+        document.querySelector('.tag-input').value = (todayEntry.tags || []).join(', ');
+        document.querySelectorAll('.tag-btn').forEach(btn => {
+            btn.classList.toggle('selected', (todayEntry.tags || []).includes(btn.textContent.trim()));
+        });
+        // Mark as editing today's entry
+        document.querySelector('.journal-composer').dataset.editingId = todayEntry.id;
+    } else {
+        if (composerTitle) composerTitle.textContent = "Today's Entry";
+        if (saveBtn) saveBtn.textContent = 'Save Entry';
+        document.querySelector('.journal-composer').dataset.editingId = '';
+    }
+
+    // Wire up search and mood filter
+    const searchInput = document.querySelector('.search-entries');
+    const moodFilter = document.querySelector('.filter-mood');
+
+    const applyFilters = () => {
+        const query = searchInput?.value.toLowerCase() || '';
+        const mood = moodFilter?.value || '';
+        const moodMap = { 'Very Good': 'very-good', 'Good': 'good', 'Neutral': 'neutral', 'Sad': 'sad', 'Very Sad': 'very-sad' };
+        const moodValue = moodMap[mood] || '';
+
+        const entries = getJournalEntries().filter(e => {
+            const matchesSearch = !query ||
+                e.title.toLowerCase().includes(query) ||
+                e.content.toLowerCase().includes(query) ||
+                (e.tags || []).some(t => t.toLowerCase().includes(query));
+            const matchesMood = !moodValue || e.mood === moodValue;
+            return matchesSearch && matchesMood;
+        });
+        renderJournalEntries(entries);
+    };
+
+    searchInput?.addEventListener('input', applyFilters);
+    moodFilter?.addEventListener('change', applyFilters);
 }
 
-async function saveJournalEntry() {
+function toggleJournalTag(btn) {
+    btn.classList.toggle('selected');
+}
+
+async function saveJournalEntry(isDraft = false) {
     const title = document.querySelector('.entry-title').value.trim();
     const content = document.querySelector('.journal-editor').value.trim();
     const mood = document.querySelector('.mood-select').value;
-    const date = document.querySelector('.entry-date').value;
     const tagInput = document.querySelector('.tag-input').value;
-    
+
     if (!title || !content) {
         showNotification('Please fill in title and content', 'error');
         return;
@@ -1752,23 +2795,49 @@ async function saveJournalEntry() {
     const selectedTags = Array.from(document.querySelectorAll('.tag-btn.selected')).map(btn => btn.textContent);
     const allTags = [...new Set([...tags, ...selectedTags])];
     
+    const sentiment = analyzeSentiment(content);
+    const entryDate = document.getElementById('journalEntryDate')?.value || localDateStr();
+    const editingId = document.querySelector('.journal-composer')?.dataset.editingId;
+
+    // Normalize date to YYYY-MM-DD for consistent comparison
+    const normalizeDate = d => (d || '').substring(0, 10);
+    // Enforce one entry per day — find any existing entry for this date
+    const existingForDate = getJournalEntries().find(e => normalizeDate(e.date) === entryDate);
+    const isUpdate = editingId || (existingForDate && existingForDate.id);
+
+    if (existingForDate && !editingId) {
+        deleteJournalEntry(existingForDate.id, true);
+        showNotification('Entry for this day updated.', 'info');
+    } else if (editingId) {
+        deleteJournalEntry(editingId, true);
+    }
+    // Immediately unmark — we're replacing, not permanently deleting
+    unmarkJournalDateDeleted(entryDate);
+
     const journalEntry = {
-        title,
+        title: isDraft ? `[Draft] ${title}` : title,
         content,
         mood,
         tags: allTags,
-        date: date || new Date().toISOString().split('T')[0],
-        wordCount: content.split(/\s+/).length,
-        isPrivate: false
+        date: entryDate,
+        wordCount: content.split(/\s+/).filter(w => w).length,
+        isPrivate: isDraft,
+        sentiment: { score: sentiment.score, label: sentiment.label, icon: sentiment.icon }
     };
+
+    // Update composer state
+    const composerTitle = document.querySelector('.journal-composer h2');
+    const saveBtn = document.querySelector('.save-actions .btn-primary');
+    if (isUpdate && composerTitle) composerTitle.textContent = "Today's Entry — Edit";
+    if (saveBtn) saveBtn.textContent = isDraft ? 'Save Draft' : isUpdate ? 'Update Entry' : 'Save Entry';
     
     try {
         // Save to backend
-        const response = await fetch(API_ENDPOINTS.journal.entries, {
+        const response = await fetch(API_ENDPOINTS.journal.create, {
             method: 'POST',
-            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             },
             body: JSON.stringify(journalEntry)
         });
@@ -1776,20 +2845,40 @@ async function saveJournalEntry() {
         if (response.ok) {
             const data = await response.json();
             if (data.success) {
-                // Add to memory system for future insights
-                await addToMemorySystem('journal', `Journal entry: ${title}. Content summary: ${content.substring(0, 200)}...`);
-                
-                showNotification('Journal entry saved successfully!', 'success');
-                
+                addToMemorySystem('journal', `Journal entry: ${title}. Content summary: ${content.substring(0, 200)}...`);
+
+                // Write entry directly to localStorage — don't rely on background sync
+                const savedEntry = {
+                    id: data.entry?.id || Date.now(),
+                    ...journalEntry,
+                    wordCount: data.entry?.word_count || journalEntry.wordCount,
+                    createdAt: data.entry?.created_at || new Date().toISOString(),
+                    lastModified: new Date().toISOString()
+                };
+                const jKey = getUserSpecificKey('mindwell_journal_entries');
+                const existing = JSON.parse(localStorage.getItem(jKey) || '[]');
+                existing.unshift(savedEntry);
+                localStorage.setItem(jKey, JSON.stringify(existing));
+
+                // Unmark deleted date so future syncs include it
+                unmarkJournalDateDeleted(entryDate);
+                // Set cache so background sync won't overwrite what we just saved
+                cacheSet('journalData', true);
+
+                showNotification(isDraft ? 'Draft saved!' : 'Journal entry saved!', 'success');
+
                 // Clear form
                 document.querySelector('.entry-title').value = '';
                 document.querySelector('.journal-editor').value = '';
                 document.querySelector('.mood-select').value = '';
                 document.querySelector('.tag-input').value = '';
                 document.querySelectorAll('.tag-btn.selected').forEach(btn => btn.classList.remove('selected'));
-                
-                // Refresh journal list
-                await loadJournalData();
+
+                // Render from localStorage immediately
+                loadJournalDataLocal();
+
+                // AI sentiment analysis (non-blocking)
+                if (!isDraft) analyseEntryWithAI(savedEntry.id, content);
             } else {
                 throw new Error(data.message || 'Failed to save journal entry');
             }
@@ -1801,13 +2890,13 @@ async function saveJournalEntry() {
         showNotification('Failed to save journal entry. Please try again.', 'error');
         
         // Fallback to local storage
-        saveJournalEntryLocal(journalEntry);
+        saveJournalEntryLocal(journalEntry, isDraft);
     }
 }
 
 // Fallback local save for journal entries
-function saveJournalEntryLocal(journalEntry) {
-    const journalKey = getUserSpecificKey('healhope_journal_entries');
+function saveJournalEntryLocal(journalEntry, isDraft = false) {
+    const journalKey = getUserSpecificKey('mindwell_journal_entries');
     const entries = JSON.parse(localStorage.getItem(journalKey) || '[]');
     const newEntry = {
         id: Date.now(),
@@ -1815,50 +2904,261 @@ function saveJournalEntryLocal(journalEntry) {
         createdAt: new Date().toISOString(),
         lastModified: new Date().toISOString()
     };
-    
+
     entries.unshift(newEntry);
     localStorage.setItem(journalKey, JSON.stringify(entries));
-    
-    showNotification('Journal entry saved locally!', 'info');
-    loadJournalData();
+    unmarkJournalDateDeleted(newEntry.date);
+    cacheSet('journalData', true); // prevent background sync from overwriting local save
+
+    showNotification(isDraft ? 'Draft saved!' : 'Journal entry saved!', 'success');
+    loadJournalDataLocal(); // render immediately, no need to hit backend
+
+    // Async AI sentiment analysis — update entry and panels when ready
+    if (!isDemoMode && isLoggedIn && !isDraft) {
+        analyseEntryWithAI(newEntry.id, journalEntry.content);
+    }
 }
 
-function loadJournalData() {
-    const entries = JSON.parse(localStorage.getItem('healhope_journal_entries') || '[]');
-    const entriesList = document.querySelector('.entries-list');
-    
-    if (!entriesList) return;
-    
-    entriesList.innerHTML = '';
-    
-    entries.slice(0, 10).forEach(entry => {
-        const entryCard = document.createElement('div');
-        entryCard.className = 'entry-card';
-        entryCard.innerHTML = `
-            <div class="entry-header">
-                <h3>${entry.title}</h3>
-                <div class="entry-meta">
-                    <span class="entry-mood">${getMoodEmoji(entry.mood)}</span>
-                    <span class="entry-date">${formatDate(entry.date)}</span>
+
+async function analyseEntryWithAI(entryId, content) {
+    const suggestionSection = document.getElementById('journalSuggestions');
+    if (suggestionSection) {
+        // Show loading state
+        document.getElementById('suggestionTitle').textContent = 'Analysing your entry...';
+        document.getElementById('suggestionText').textContent = '';
+        document.getElementById('suggestionActions').innerHTML = '';
+        document.getElementById('suggestionIcon').textContent = '✨';
+        suggestionSection.style.display = 'block';
+    }
+
+    try {
+        const response = await fetch(API_ENDPOINTS.journal.analyse, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({ text: content })
+        });
+
+        const result = await response.json();
+        if (!result.success) throw new Error(result.error || 'Analysis failed');
+
+        // Update the entry in localStorage with AI sentiment
+        if (entryId) {
+            const entries = getJournalEntries();
+            const idx = entries.findIndex(e => e.id === entryId);
+            if (idx !== -1) {
+                entries[idx].sentiment = { score: result.score, label: result.label, icon: result.icon };
+                setJournalEntries(entries);
+            }
+        }
+
+        // Update suggestion panel with AI result
+        const actionTabMap = {
+            'meditation': 'meditation', 'breathe': 'meditation', 'breathing': 'meditation',
+            'goal': 'goals', 'resource': 'resources', 'support': 'crisis', 'talk': 'crisis'
+        };
+
+        if (suggestionSection) {
+            document.getElementById('suggestionIcon').textContent = result.icon;
+            document.getElementById('suggestionTitle').textContent = getSentimentTitle(result.label);
+            document.getElementById('suggestionSubtitle').textContent = 'Based on your entry today';
+            document.getElementById('suggestionText').textContent = result.suggestion;
+
+            const actionsEl = document.getElementById('suggestionActions');
+            actionsEl.innerHTML = (result.actions || []).map(label => {
+                const tab = Object.entries(actionTabMap).find(([k]) => label.toLowerCase().includes(k))?.[1] || 'resources';
+                return `<button class="btn btn-outline btn-sm" onclick="switchTab('${tab}')" style="font-size:13px;">${label}</button>`;
+            }).join('');
+            suggestionSection.style.display = 'block';
+        }
+
+        // Re-render entries to show updated label
+        renderJournalEntries(getJournalEntries());
+
+    } catch (err) {
+        console.warn('AI sentiment analysis failed, using keyword fallback:', err);
+        // Fall back to keyword-based analysis already stored
+        updateSentimentSuggestions(getJournalEntries());
+    }
+}
+
+function getSentimentTitle(label) {
+    const titles = {
+        'Bright': 'You seem to be in a good space ☀️',
+        'Partly Cloudy': 'A thoughtful, balanced day ⛅',
+        'Cloudy': 'It sounds like a heavy day 🌧️'
+    };
+    return titles[label] || 'How you\'re feeling today';
+}
+
+function getJournalEntries() {
+    const key = getUserSpecificKey('mindwell_journal_entries');
+    return JSON.parse(localStorage.getItem(key) || '[]');
+}
+
+function setJournalEntries(entries) {
+    const key = getUserSpecificKey('mindwell_journal_entries');
+    localStorage.setItem(key, JSON.stringify(entries));
+}
+
+function viewJournalEntry(id) {
+    const entry = getJournalEntries().find(e => e.id == id);
+    if (!entry) return;
+
+    const existing = document.getElementById('journalViewModal');
+    if (existing) existing.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'journalViewModal';
+    modal.className = 'modal active';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width:680px;max-height:85vh;overflow-y:auto;">
+            <div class="modal-header">
+                <h2>${getMoodEmoji(entry.mood)} ${entry.title}</h2>
+                <span class="close" onclick="document.getElementById('journalViewModal').remove();document.body.style.overflow=''">&times;</span>
+            </div>
+            <div style="padding:24px 28px;">
+                <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;color:#64748b;font-size:13px;">
+                    <span><i class="fas fa-calendar"></i> ${formatDate(entry.date)}</span>
+                    <span><i class="fas fa-pen"></i> ${entry.wordCount || 0} words</span>
+                    ${entry.isPrivate ? '<span><i class="fas fa-lock"></i> Draft</span>' : ''}
+                </div>
+                <div style="white-space:pre-wrap;line-height:1.8;color:#374151;font-size:15px;margin-bottom:20px;">${entry.content}</div>
+                ${entry.tags?.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;">${entry.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>` : ''}
+                <div style="display:flex;gap:10px;margin-top:24px;">
+                    <button class="btn btn-primary btn-sm" onclick="document.getElementById('journalViewModal').remove();document.body.style.overflow='';editJournalEntry(${entry.id})">
+                        <i class="fas fa-edit"></i> Edit
+                    </button>
+                    <button class="btn btn-outline btn-sm" onclick="document.getElementById('journalViewModal').remove();document.body.style.overflow=''">Close</button>
                 </div>
             </div>
-            <div class="entry-preview">
-                <p>${entry.content.substring(0, 150)}${entry.content.length > 150 ? '...' : ''}</p>
-            </div>
-            <div class="entry-tags">
-                ${entry.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}
-            </div>
-            <div class="entry-actions">
-                <button class="btn btn-outline btn-sm" onclick="editJournalEntry(${entry.id})">Edit</button>
-                <button class="btn btn-outline btn-sm" onclick="viewJournalEntry(${entry.id})">View Full</button>
-                <button class="btn btn-outline btn-sm" onclick="deleteJournalEntry(${entry.id})">Delete</button>
-            </div>
-            <div class="entry-stats">
-                <small>${entry.wordCount} words • ${getTimeAgo(entry.createdAt)}</small>
-            </div>
-        `;
-        entriesList.appendChild(entryCard);
+        </div>
+    `;
+    document.body.appendChild(modal);
+    document.body.style.overflow = 'hidden';
+}
+
+function editJournalEntry(id) {
+    const entry = getJournalEntries().find(e => e.id == id);
+    if (!entry) return;
+
+    // Populate the composer with existing entry data
+    document.querySelector('.entry-title').value = entry.title.replace(/^\[Draft\] /, '');
+    document.querySelector('.journal-editor').value = entry.content;
+    document.querySelector('.entry-date').value = entry.date?.split('T')[0] || '';
+    const moodSelect = document.querySelector('.mood-select');
+    if (moodSelect) moodSelect.value = entry.mood || '';
+    document.querySelector('.tag-input').value = (entry.tags || []).join(', ');
+
+    // Mark matching tag buttons selected
+    document.querySelectorAll('.tag-btn').forEach(btn => {
+        btn.classList.toggle('selected', (entry.tags || []).includes(btn.textContent.trim()));
     });
+
+    // Delete old entry so saving creates a fresh one
+    deleteJournalEntry(id, true);
+
+    document.querySelector('.journal-composer').scrollIntoView({ behavior: 'smooth' });
+    showNotification('Entry loaded for editing — save when done.', 'info');
+}
+
+function getDeletedJournalDates() {
+    const key = getUserSpecificKey('mindwell_deleted_journal_dates');
+    return JSON.parse(localStorage.getItem(key) || '[]');
+}
+
+function markJournalDateDeleted(date) {
+    if (!date) return;
+    const key = getUserSpecificKey('mindwell_deleted_journal_dates');
+    const dates = getDeletedJournalDates();
+    const day = date.substring(0, 10);
+    if (!dates.includes(day)) {
+        dates.push(day);
+        localStorage.setItem(key, JSON.stringify(dates));
+    }
+}
+
+function unmarkJournalDateDeleted(date) {
+    if (!date) return;
+    const key = getUserSpecificKey('mindwell_deleted_journal_dates');
+    const day = date.substring(0, 10);
+    const dates = getDeletedJournalDates().filter(d => d !== day);
+    localStorage.setItem(key, JSON.stringify(dates));
+}
+
+async function deleteJournalEntry(id, silent = false) {
+    if (!silent && !confirm('Delete this journal entry?')) return;
+
+    // Find entry before removing so we can get its date and backend ID
+    const entry = getJournalEntries().find(e => e.id == id);
+
+    // Remove from localStorage immediately
+    setJournalEntries(getJournalEntries().filter(e => e.id != id));
+
+    // Track deleted date so background sync never restores it
+    if (entry?.date) markJournalDateDeleted(entry.date);
+
+    // Also delete from backend (fire-and-forget, don't block UI)
+    if (!isDemoMode && isLoggedIn && entry?.id) {
+        fetch(`${API_ENDPOINTS.journal.entries}${entry.id}/`, {
+            method: 'DELETE',
+            headers: { ...getAuthHeaders() }
+        }).catch(() => {});
+    }
+
+    // Invalidate cache so next sync re-fetches without the deleted entry
+    cacheInvalidate('journalData');
+
+    if (!silent) {
+        showNotification('Entry deleted.', 'info');
+        loadJournalData();
+        updateJournalStats();
+    }
+}
+
+function analyzeSentiment(text) {
+    const positive = [
+        'happy','joy','grateful','gratitude','love','excited','hopeful','proud','peaceful','calm',
+        'amazing','wonderful','blessed','thankful','accomplished','confident','energized','motivated',
+        'optimistic','smile','laugh','great','good','better','improve','progress','success','achieve',
+        'celebrate','bright','strong','grow','thrive','heal','recover','friend','family','care','hope',
+        'dream','goal','beautiful','inspire','courage','strength','resilient','forward','light','warmth',
+        'kind','appreciate','enjoy','comfort','safe','secure','trust','believe','relax','refresh','balance',
+        'clarity','peaceful','content','fulfilled','serene','delight','pleasure','excited','alive','free',
+        'connection','understanding','support','loved','accepted','enough','capable','worthy'
+    ];
+    const negative = [
+        'sad','angry','anxious','worried','stressed','depressed','hopeless','tired','exhausted',
+        'overwhelmed','frustrated','scared','fear','hate','fail','failure','worthless','useless',
+        'alone','lonely','empty','dark','heavy','hurt','pain','cry','broken','stuck','trapped',
+        'lost','numb','dread','panic','shame','guilt','regret','disappoint','struggle','difficult',
+        'bad','worse','worst','terrible','awful','horrible','miserable','suffer','despair','grief',
+        'sorrow','burden','pressure','tension','conflict','trouble','wrong','mistake','blame',
+        'reject','abandon','isolate','pointless','meaningless','helpless','powerless','invisible',
+        'unloved','unworthy','unwanted','fail','numb','hollow','bitter','resentful','devastated'
+    ];
+    const negators = new Set(['not','never','no','neither','nor','cannot','cant',"don't","won't","can't","doesn't","didn't"]);
+
+    const words = text.toLowerCase().replace(/['"]/g, '').match(/\b\w+\b/g) || [];
+    let score = 0;
+
+    for (let i = 0; i < words.length; i++) {
+        const w = words[i];
+        const prev = words[i - 1] || '';
+        const negated = negators.has(prev);
+        if (positive.includes(w)) score += negated ? -1 : 1;
+        else if (negative.includes(w)) score += negated ? 1 : -1;
+    }
+
+    // Normalize: clamp to -10..+10
+    const raw = words.length > 0 ? (score / Math.sqrt(words.length)) * 3 : 0;
+    const normalized = Math.max(-10, Math.min(10, Math.round(raw)));
+
+    let label, icon, color, bg;
+    if (normalized >= 2)       { label = 'Bright';        icon = '☀️';  color = '#d97706'; bg = '#fffbeb'; }
+    else if (normalized >= -1) { label = 'Partly Cloudy'; icon = '⛅';  color = '#0284c7'; bg = '#f0f9ff'; }
+    else                       { label = 'Cloudy';        icon = '🌧️'; color = '#475569'; bg = '#f8fafc'; }
+
+    return { score: normalized, label, icon, color, bg };
 }
 
 function getMoodEmoji(mood) {
@@ -1873,30 +3173,29 @@ function getMoodEmoji(mood) {
 }
 
 function updateJournalStats() {
-    const entries = JSON.parse(localStorage.getItem('healhope_journal_entries') || '[]');
-    const totalWords = entries.reduce((sum, entry) => sum + entry.wordCount, 0);
+    const entries = getJournalEntries();
+    const totalWords = entries.reduce((sum, e) => sum + (e.wordCount || 0), 0);
     const streak = calculateWritingStreak(entries);
-    
-    // Update stats in UI if elements exist
-    const statsElements = document.querySelectorAll('.journal-stat');
-    if (statsElements.length > 0) {
-        statsElements[0].textContent = `${entries.length} entries`;
-        statsElements[1].textContent = `${totalWords} words`;
-        statsElements[2].textContent = `${streak} day streak`;
-    }
+
+    const el1 = document.getElementById('journalStatEntries');
+    const el2 = document.getElementById('journalStatWords');
+    const el3 = document.getElementById('journalStatStreak');
+    if (el1) el1.textContent = `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}`;
+    if (el2) el2.textContent = `${totalWords.toLocaleString()} words`;
+    if (el3) el3.textContent = `${streak} day streak`;
 }
 
 function calculateWritingStreak(entries) {
     if (entries.length === 0) return 0;
     
-    const today = new Date().toISOString().split('T')[0];
+    const today = localDateStr();
     const dates = [...new Set(entries.map(entry => entry.date))].sort();
     
     let streak = 0;
     let currentDate = new Date(today);
     
     while (true) {
-        const dateStr = currentDate.toISOString().split('T')[0];
+        const dateStr = localDateStr(currentDate);
         if (dates.includes(dateStr)) {
             streak++;
             currentDate.setDate(currentDate.getDate() - 1);
@@ -1910,7 +3209,8 @@ function calculateWritingStreak(entries) {
 
 // Goals Management System
 function initializeGoals() {
-    if (!localStorage.getItem('healhope_goals')) {
+    const _goalsKey = getUserSpecificKey('mindwell_goals');
+    if (!localStorage.getItem(_goalsKey)) {
         const sampleGoals = [
             {
                 id: 1,
@@ -1921,8 +3221,8 @@ function initializeGoals() {
                 targetValue: 30,
                 currentValue: 7,
                 unit: "days",
-                startDate: new Date().toISOString().split('T')[0],
-                endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                startDate: localDateStr(),
+                endDate: localDateStr(new Date(Date.now() + 30*86400000)),
                 status: "active",
                 priority: "high",
                 reminders: true,
@@ -1937,15 +3237,15 @@ function initializeGoals() {
                 targetValue: 12,
                 currentValue: 8,
                 unit: "sessions",
-                startDate: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-                endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                startDate: localDateStr(new Date(Date.now() - 60*86400000)),
+                endDate: localDateStr(new Date(Date.now() + 30*86400000)),
                 status: "active",
                 priority: "medium",
                 reminders: true,
                 createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString()
             }
         ];
-        localStorage.setItem('healhope_goals', JSON.stringify(sampleGoals));
+        localStorage.setItem(_goalsKey, JSON.stringify(sampleGoals));
     }
 }
 
@@ -1954,52 +3254,83 @@ function createNewGoal() {
 }
 
 function showGoalModal() {
+    const today = localDateStr();
+    const next30 = localDateStr(new Date(Date.now() + 30*86400000));
     const modalHtml = `
-        <div id="goalModal" class="modal show" style="display: flex;">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h2>Create New Goal</h2>
-                    <span class="close" onclick="closeGoalModal()">&times;</span>
+        <div id="goalModal" style="display:flex;align-items:center;justify-content:center;position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,0.6);backdrop-filter:blur(6px);padding:16px;">
+            <div style="background:#fff;border-radius:20px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;box-shadow:0 25px 60px rgba(0,0,0,0.2);animation:goalModalIn 0.25s ease;">
+                <!-- Header -->
+                <div style="padding:28px 28px 0;display:flex;align-items:center;justify-content:space-between;">
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#4facfe,#00f2fe);display:flex;align-items:center;justify-content:center;">
+                            <i class="fas fa-bullseye" style="color:#fff;font-size:16px;"></i>
+                        </div>
+                        <div>
+                            <h2 style="margin:0;font-size:20px;font-weight:700;color:#0f172a;">Create New Goal</h2>
+                            <p style="margin:0;font-size:12px;color:#94a3b8;">Track your mental wellness journey</p>
+                        </div>
+                    </div>
+                    <button onclick="closeGoalModal()" style="width:32px;height:32px;border-radius:50%;border:none;background:#f1f5f9;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:16px;transition:background 0.2s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='#f1f5f9'">&times;</button>
                 </div>
-                <form id="goalForm" class="auth-form">
-                    <div class="form-group">
-                        <label for="goalTitle">Goal Title</label>
-                        <input type="text" id="goalTitle" name="title" required placeholder="e.g., Daily Exercise">
+
+                <form id="goalForm" style="padding:24px 28px 28px;display:flex;flex-direction:column;gap:18px;">
+                    <!-- Title -->
+                    <div>
+                        <label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">Goal Title <span style="color:#ef4444;">*</span></label>
+                        <input type="text" id="goalTitle" name="title" required placeholder="e.g., Daily Meditation Practice"
+                            style="width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:14px;color:#0f172a;outline:none;transition:border-color 0.2s;box-sizing:border-box;"
+                            onfocus="this.style.borderColor='#4facfe'" onblur="this.style.borderColor='#e2e8f0'">
                     </div>
-                    <div class="form-group">
-                        <label for="goalDescription">Description</label>
-                        <textarea id="goalDescription" name="description" rows="3" placeholder="Describe your goal in detail..."></textarea>
+
+                    <!-- Description -->
+                    <div>
+                        <label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">Description</label>
+                        <textarea id="goalDescription" name="description" rows="2" placeholder="Describe your goal and why it matters to you..."
+                            style="width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:14px;color:#0f172a;outline:none;resize:vertical;transition:border-color 0.2s;font-family:inherit;box-sizing:border-box;"
+                            onfocus="this.style.borderColor='#4facfe'" onblur="this.style.borderColor='#e2e8f0'"></textarea>
                     </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="goalCategory">Category</label>
-                            <select id="goalCategory" name="category">
-                                <option value="mindfulness">Mindfulness</option>
-                                <option value="therapy">Therapy</option>
-                                <option value="exercise">Exercise</option>
-                                <option value="sleep">Sleep</option>
-                                <option value="social">Social</option>
-                                <option value="self-care">Self-care</option>
-                                <option value="other">Other</option>
+
+                    <!-- Category + Priority -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                        <div>
+                            <label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">Category</label>
+                            <select id="goalCategory" name="category"
+                                style="width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:14px;color:#0f172a;outline:none;background:#fff;cursor:pointer;box-sizing:border-box;"
+                                onfocus="this.style.borderColor='#4facfe'" onblur="this.style.borderColor='#e2e8f0'">
+                                <option value="mindfulness">🧘 Mindfulness</option>
+                                <option value="therapy">💬 Therapy</option>
+                                <option value="exercise">🏃 Exercise</option>
+                                <option value="sleep">😴 Sleep</option>
+                                <option value="social">🤝 Social</option>
+                                <option value="self-care">💆 Self-care</option>
+                                <option value="other">✨ Other</option>
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label for="goalPriority">Priority</label>
-                            <select id="goalPriority" name="priority">
-                                <option value="low">Low</option>
-                                <option value="medium">Medium</option>
-                                <option value="high">High</option>
+                        <div>
+                            <label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">Priority</label>
+                            <select id="goalPriority" name="priority"
+                                style="width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:14px;color:#0f172a;outline:none;background:#fff;cursor:pointer;box-sizing:border-box;"
+                                onfocus="this.style.borderColor='#4facfe'" onblur="this.style.borderColor='#e2e8f0'">
+                                <option value="low">🟢 Low</option>
+                                <option value="medium" selected>🟡 Medium</option>
+                                <option value="high">🔴 High</option>
                             </select>
                         </div>
                     </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="goalTarget">Target Value</label>
-                            <input type="number" id="goalTarget" name="target" min="1" required placeholder="30">
+
+                    <!-- Target + Unit -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                        <div>
+                            <label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">Target Value <span style="color:#ef4444;">*</span></label>
+                            <input type="number" id="goalTarget" name="target" min="1" required placeholder="30"
+                                style="width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:14px;color:#0f172a;outline:none;transition:border-color 0.2s;box-sizing:border-box;"
+                                onfocus="this.style.borderColor='#4facfe'" onblur="this.style.borderColor='#e2e8f0'">
                         </div>
-                        <div class="form-group">
-                            <label for="goalUnit">Unit</label>
-                            <select id="goalUnit" name="unit">
+                        <div>
+                            <label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">Unit</label>
+                            <select id="goalUnit" name="unit"
+                                style="width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:14px;color:#0f172a;outline:none;background:#fff;cursor:pointer;box-sizing:border-box;"
+                                onfocus="this.style.borderColor='#4facfe'" onblur="this.style.borderColor='#e2e8f0'">
                                 <option value="days">Days</option>
                                 <option value="sessions">Sessions</option>
                                 <option value="hours">Hours</option>
@@ -2008,27 +3339,47 @@ function showGoalModal() {
                             </select>
                         </div>
                     </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="goalStartDate">Start Date</label>
-                            <input type="date" id="goalStartDate" name="startDate" value="${new Date().toISOString().split('T')[0]}">
+
+                    <!-- Start + End Date -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                        <div>
+                            <label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">Start Date</label>
+                            <input type="date" id="goalStartDate" name="startDate" value="${today}"
+                                style="width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:14px;color:#0f172a;outline:none;box-sizing:border-box;"
+                                onfocus="this.style.borderColor='#4facfe'" onblur="this.style.borderColor='#e2e8f0'">
                         </div>
-                        <div class="form-group">
-                            <label for="goalEndDate">End Date</label>
-                            <input type="date" id="goalEndDate" name="endDate" value="${new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}">
+                        <div>
+                            <label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">End Date</label>
+                            <input type="date" id="goalEndDate" name="endDate" value="${next30}"
+                                style="width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:10px;font-size:14px;color:#0f172a;outline:none;box-sizing:border-box;"
+                                onfocus="this.style.borderColor='#4facfe'" onblur="this.style.borderColor='#e2e8f0'">
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label class="checkbox-container">
-                            <input type="checkbox" name="reminders" checked>
-                            <span class="checkmark"></span>
-                            Enable reminders for this goal
-                        </label>
-                    </div>
-                    <button type="submit" class="btn btn-primary btn-full">Create Goal</button>
+
+                    <!-- Reminders toggle -->
+                    <label style="display:flex;align-items:center;gap:10px;padding:14px;background:#f8fafc;border-radius:12px;cursor:pointer;border:1.5px solid #e2e8f0;">
+                        <input type="checkbox" name="reminders" checked style="width:16px;height:16px;accent-color:#4facfe;cursor:pointer;">
+                        <div>
+                            <span style="font-size:14px;font-weight:600;color:#374151;">Enable reminders</span>
+                            <p style="margin:0;font-size:12px;color:#94a3b8;">Get notified to stay on track</p>
+                        </div>
+                    </label>
+
+                    <!-- Submit -->
+                    <button type="submit"
+                        style="width:100%;padding:14px;background:linear-gradient(135deg,#4facfe,#00f2fe);border:none;border-radius:12px;color:#fff;font-size:15px;font-weight:700;cursor:pointer;transition:opacity 0.2s;letter-spacing:0.3px;"
+                        onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
+                        <i class="fas fa-plus" style="margin-right:8px;"></i>Create Goal
+                    </button>
                 </form>
             </div>
         </div>
+        <style>
+            @keyframes goalModalIn {
+                from { opacity:0; transform:scale(0.95) translateY(10px); }
+                to   { opacity:1; transform:scale(1) translateY(0); }
+            }
+        </style>
     `;
     
     document.body.insertAdjacentHTML('beforeend', modalHtml);
@@ -2044,94 +3395,306 @@ function closeGoalModal() {
     if (modal) modal.remove();
 }
 
-function saveNewGoal(form) {
-    const formData = new FormData(form);
-    const goalsKey = getUserSpecificKey('healhope_goals');
-    const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
-    
-    const newGoal = {
-        id: Date.now(),
-        title: formData.get('title'),
-        description: formData.get('description'),
-        category: formData.get('category'),
-        targetType: "count",
-        targetValue: parseInt(formData.get('target')),
-        currentValue: 0,
-        unit: formData.get('unit'),
-        startDate: formData.get('startDate'),
-        endDate: formData.get('endDate'),
-        status: "active",
-        priority: formData.get('priority'),
-        reminders: formData.get('reminders') === 'on',
-        createdAt: new Date().toISOString()
+// One-click add from Suggested Goals panel
+async function addSuggestedGoal(title, description, category, targetValue, unit) {
+    // Duplicate check — fetch existing goals and compare titles (case-insensitive)
+    if (!isDemoMode && isLoggedIn) {
+        try {
+            const res = await fetch(API_ENDPOINTS.goals.list, {
+                headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const existing = Array.isArray(data) ? data : (data.goals || []);
+                const alreadyExists = existing.some(
+                    g => g.title.trim().toLowerCase() === title.trim().toLowerCase()
+                );
+                if (alreadyExists) {
+                    showNotification(`"${title}" is already in your goals.`, 'info');
+                    return;
+                }
+            }
+        } catch (e) { /* proceed with creation if check fails */ }
+    } else {
+        const goalsKey = getUserSpecificKey('mindwell_goals');
+        const local = JSON.parse(localStorage.getItem(goalsKey) || '[]');
+        if (local.some(g => g.title.trim().toLowerCase() === title.trim().toLowerCase())) {
+            showNotification(`"${title}" is already in your goals.`, 'info');
+            return;
+        }
+    }
+
+    const today = new Date();
+    const endDate = new Date(today);
+    endDate.setDate(today.getDate() + 30);
+
+    const payload = {
+        title,
+        description,
+        category,
+        target_value: targetValue,
+        current_value: 0,
+        unit,
+        start_date: localDateStr(today),
+        end_date: localDateStr(endDate),
+        status: 'active',
+        priority: 'medium'
     };
-    
-    goals.unshift(newGoal);
+
+    if (!isDemoMode && isLoggedIn) {
+        try {
+            const response = await fetch(API_ENDPOINTS.goals.create, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            if (response.ok) {
+                showNotification(`"${title}" added to your goals!`, 'success');
+                loadGoalsData();
+                return;
+            }
+            showNotification(data.detail || JSON.stringify(data) || 'Failed to add goal.', 'error');
+            return;
+        } catch (e) { console.error('addSuggestedGoal error:', e); }
+    }
+    // demo fallback
+    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
+    goals.unshift({ ...payload, id: Date.now(), currentValue: 0, targetValue });
     localStorage.setItem(goalsKey, JSON.stringify(goals));
-    
-    showNotification('Goal created successfully!', 'success');
+    showNotification(`"${title}" added to your goals!`, 'success');
+    loadGoalsData();
+}
+
+async function saveNewGoal(form) {
+    const formData = new FormData(form);
+    const today = localDateStr();
+    const next30 = localDateStr(new Date(Date.now() + 30*86400000));
+
+    const payload = {
+        title:        formData.get('title'),
+        description:  formData.get('description') || formData.get('title'),
+        category:     formData.get('category') || 'other',
+        target_value: parseInt(formData.get('target')) || 1,
+        current_value: 0,
+        unit:         formData.get('unit') || 'days',
+        start_date:   formData.get('startDate') || today,
+        end_date:     formData.get('endDate') || next30,
+        status:       'active',
+        priority:     formData.get('priority') || 'medium',
+        reminders:    formData.get('reminders') === 'on'
+    };
+
+    if (!isDemoMode && isLoggedIn) {
+        try {
+            const response = await fetch(API_ENDPOINTS.goals.create, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            if (response.ok && data.success) {
+                showNotification('Goal created successfully!', 'success');
+                closeGoalModal();
+                loadGoalsData();
+                return;
+            }
+            const errMsg = data.errors ? Object.values(data.errors).flat().join(' ') : 'Failed to create goal.';
+            showNotification(errMsg, 'error');
+            return;
+        } catch (e) { console.error('saveNewGoal error:', e); }
+    }
+    // demo fallback
+    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
+    goals.unshift({ ...payload, id: Date.now(), currentValue: 0, targetValue: payload.target_value });
+    localStorage.setItem(goalsKey, JSON.stringify(goals));
+    showNotification('Goal created!', 'success');
     closeGoalModal();
     loadGoalsData();
 }
 
-function loadGoalsData() {
-    const goals = JSON.parse(localStorage.getItem('healhope_goals') || '[]');
+// Renders goals — handles both backend snake_case and localStorage camelCase
+function renderGoalsList(goals) {
     const goalsList = document.querySelector('.goal-list');
-    
     if (!goalsList) return;
-    
     goalsList.innerHTML = '';
-    
-    goals.forEach(goal => {
-        const progress = Math.min((goal.currentValue / goal.targetValue) * 100, 100);
-        const isCompleted = progress >= 100;
-        
-        const goalCard = document.createElement('div');
-        goalCard.className = `goal-card ${isCompleted ? 'completed' : 'active'}`;
-        goalCard.innerHTML = `
-            <div class="goal-header">
+
+    if (!goals || goals.length === 0) {
+        goalsList.innerHTML = '<p style="color:#6b7280;text-align:center;padding:24px;">No goals yet. Click "+ Create New Goal" to get started!</p>';
+        return;
+    }
+
+    const active    = goals.filter(g => (g.status || 'active') !== 'completed');
+    const completed = goals.filter(g => (g.status || 'active') === 'completed');
+
+    function makeCard(goal) {
+        const current     = goal.current_value ?? goal.currentValue ?? 0;
+        const target      = goal.target_value  ?? goal.targetValue  ?? 1;
+        const unit        = goal.unit    || '';
+        const status      = goal.status  || 'active';
+        const isCompleted = status === 'completed';
+        // Completed goals always show 100% on the bar
+        const progress    = isCompleted ? 100 : Math.min((current / target) * 100, 100);
+        const displayVal  = isCompleted ? target : current;
+        const completedAt = goal.completed_at || null;
+        const endDate     = goal.end_date || goal.endDate || null;
+
+        const card = document.createElement('div');
+        card.className = `goal-card ${isCompleted ? 'completed' : 'active'}`;
+        card.style.position = 'relative';
+        card.innerHTML = `
+            <!-- Delete button — top-right corner -->
+            <button class="btn btn-danger btn-sm goal-delete-btn"
+                    onclick="deleteGoal(${goal.id})" title="Delete goal"
+                    style="position:absolute;top:12px;right:12px;padding:4px 8px;font-size:0.75rem;">
+                <i class="fas fa-trash-alt"></i>
+            </button>
+
+            <div class="goal-header" style="padding-right:48px;">
                 <h3>${goal.title}</h3>
-                <span class="goal-status ${isCompleted ? 'completed' : 'in-progress'}">${isCompleted ? 'Completed' : 'In Progress'}</span>
+                <span class="goal-status ${isCompleted ? 'completed' : 'in-progress'}">
+                    ${isCompleted ? '✓ Completed' : 'In Progress'}
+                </span>
             </div>
-            <p>${goal.description}</p>
+            <p class="goal-description">${goal.description || ''}</p>
             <div class="goal-progress">
                 <div class="progress-info">
-                    <span>Progress: ${goal.currentValue}/${goal.targetValue} ${goal.unit}</span>
+                    <span>Progress: ${displayVal} / ${target} ${unit}</span>
                     <span>${Math.round(progress)}%</span>
                 </div>
                 <div class="progress-bar">
-                    <div class="progress" style="width: ${progress}%"></div>
+                    <div class="progress" style="width:${progress}%"></div>
                 </div>
             </div>
-            ${isCompleted ? 
-                `<div class="goal-completion">
-                    <i class="fas fa-trophy"></i>
-                    <span>Completed on ${formatDate(goal.endDate)}</span>
-                </div>` :
-                `<div class="goal-actions">
-                    <button class="btn btn-outline btn-sm" onclick="updateGoalProgress(${goal.id}, 1)">+1</button>
-                    <button class="btn btn-outline btn-sm" onclick="editGoal(${goal.id})">Edit</button>
+            <div class="goal-meta">
+                ${endDate ? `<span>Due: ${formatDate(endDate)}</span>` : ''}
+                <span>Priority: ${goal.priority || 'medium'}</span>
+            </div>
+            <div class="goal-actions">
+                ${!isCompleted ? `
+                    <button class="btn btn-outline btn-sm" onclick="updateGoalProgress(${goal.id}, 1)">+1 Progress</button>
                     <button class="btn btn-primary btn-sm" onclick="markGoalComplete(${goal.id})">Mark Complete</button>
-                </div>`
-            }
+                ` : `
+                    <span style="color:#6b7280;font-size:0.8rem;">
+                        <i class="fas fa-trophy" style="color:#f59e0b;margin-right:4px;"></i>
+                        Completed${completedAt ? ' on ' + formatDate(completedAt) : ''}
+                    </span>
+                `}
+            </div>
         `;
-        goalsList.appendChild(goalCard);
-    });
+        goalsList.appendChild(card);
+    }
+
+    if (active.length > 0) {
+        const title = document.createElement('p');
+        title.className = 'goal-section-title';
+        title.textContent = `Active (${active.length})`;
+        goalsList.appendChild(title);
+        active.forEach(makeCard);
+    }
+
+    if (completed.length > 0) {
+        const title = document.createElement('p');
+        title.className = 'goal-section-title';
+        title.textContent = `Completed (${completed.length})`;
+        goalsList.appendChild(title);
+        completed.forEach(makeCard);
+    }
 }
 
-function updateGoalProgress(goalId, increment) {
-    const goalsKey = getUserSpecificKey('healhope_goals');
+async function updateGoalProgress(goalId, increment) {
+    if (!isDemoMode && isLoggedIn) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/dashboard/api/goals/${goalId}/update_progress/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                body: JSON.stringify({ increment })
+            });
+            const data = await response.json();
+            if (response.ok && data.success) {
+                if (data.goal && data.goal.status === 'completed')
+                    showNotification(`🎉 Goal "${data.goal.title}" completed!`, 'success');
+                else
+                    showNotification('Progress updated!', 'success');
+                loadGoalsData();
+                return;
+            }
+            showNotification('Failed to update progress.', 'error');
+        } catch (e) { console.error('updateGoalProgress error:', e); }
+        return;
+    }
+    // demo fallback
+    const goalsKey = getUserSpecificKey('mindwell_goals');
     const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
     const goal = goals.find(g => g.id === goalId);
-    
     if (goal) {
-        goal.currentValue = Math.min(goal.currentValue + increment, goal.targetValue);
-        localStorage.setItem(goalsKey, JSON.stringify(goals));
-        
+        goal.currentValue = Math.min((goal.currentValue || 0) + increment, goal.targetValue || 1);
         if (goal.currentValue >= goal.targetValue) {
+            goal.status = 'completed';
             showNotification(`🎉 Goal "${goal.title}" completed!`, 'success');
+        } else {
+            showNotification('Progress updated!', 'success');
         }
-        
+        localStorage.setItem(goalsKey, JSON.stringify(goals));
+        loadGoalsData();
+    }
+}
+
+async function deleteGoal(goalId) {
+    if (!confirm('Delete this goal?')) return;
+    if (!isDemoMode && isLoggedIn) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/dashboard/api/goals/${goalId}/`, {
+                method: 'DELETE',
+                headers: { ...getAuthHeaders() }
+            });
+            if (response.ok || response.status === 204) {
+                showNotification('Goal deleted.', 'info');
+                loadGoalsData();
+                return;
+            }
+        } catch (e) { console.error('deleteGoal error:', e); }
+        return;
+    }
+    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]').filter(g => g.id !== goalId);
+    localStorage.setItem(goalsKey, JSON.stringify(goals));
+    showNotification('Goal deleted.', 'info');
+    loadGoalsData();
+}
+
+async function markGoalComplete(goalId) {
+    if (!isDemoMode && isLoggedIn) {
+        try {
+            // Fetch goal first to know target_value so we can set current_value = target_value
+            const getRes = await fetch(`${API_BASE_URL}/dashboard/api/goals/${goalId}/`, {
+                headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }
+            });
+            const goal = await getRes.json();
+            const patchRes = await fetch(`${API_BASE_URL}/dashboard/api/goals/${goalId}/`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                body: JSON.stringify({ status: 'completed', current_value: goal.target_value })
+            });
+            if (patchRes.ok) {
+                showNotification('Goal completed! 🎉', 'success');
+                loadGoalsData();
+                return;
+            }
+        } catch (e) { console.error('markGoalComplete error:', e); }
+        return;
+    }
+    // demo fallback
+    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goals = JSON.parse(localStorage.getItem(goalsKey) || '[]');
+    const goal = goals.find(g => g.id === goalId);
+    if (goal) {
+        goal.status = 'completed';
+        goal.currentValue = goal.targetValue;
+        localStorage.setItem(goalsKey, JSON.stringify(goals));
+        showNotification('Goal completed! 🎉', 'success');
         loadGoalsData();
     }
 }
@@ -2167,7 +3730,7 @@ function showBookingModal() {
                     <div class="form-row">
                         <div class="form-group">
                             <label for="appointmentDate">Preferred Date</label>
-                            <input type="date" id="appointmentDate" name="date" required min="${new Date().toISOString().split('T')[0]}">
+                            <input type="date" id="appointmentDate" name="date" required min="${localDateStr()}">
                         </div>
                         <div class="form-group">
                             <label for="appointmentTime">Preferred Time</label>
@@ -2215,7 +3778,7 @@ function closeAppointmentModal() {
 
 function saveAppointment(form) {
     const formData = new FormData(form);
-    const appointments = JSON.parse(localStorage.getItem('healhope_appointments') || '[]');
+    const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
     
     const newAppointment = {
         id: Date.now(),
@@ -2230,7 +3793,7 @@ function saveAppointment(form) {
     };
     
     appointments.unshift(newAppointment);
-    localStorage.setItem('healhope_appointments', JSON.stringify(appointments));
+    localStorage.setItem('mindwell_appointments', JSON.stringify(appointments));
     
     showNotification('Appointment booked successfully!', 'success');
     closeAppointmentModal();
@@ -2265,13 +3828,22 @@ function setupCrisisChatButton() {
 
 // WebSocket connection for real-time chat
 let chatSocket = null;
+let chatHistory = []; // [{role:'user'|'assistant', content:'...'}]
 let reconnectAttempts = 0;
 const maxReconnectAttempts = 5;
 
+// WebSocket for real-time community feed
+let communitySocket = null;
+let communityReconnectTimer = null;
+
+// WebSocket for group chat
+let groupChatSocket = null;
+let activeGroupChatId = null;
+
 // Enhanced Crisis Support with AI and Memory Integration
 async function startCrisisChat() {
-    console.log('Starting crisis chat with AI and memory integration...');
-    
+    chatHistory = []; // fresh conversation each time
+
     // Remove any existing chat modal first
     const existingChat = document.getElementById('crisisChat');
     if (existingChat) {
@@ -2279,7 +3851,7 @@ async function startCrisisChat() {
     }
     
     // Log crisis chat initiation to memory system
-    await addToMemorySystem('crisis', 'User initiated crisis support chat');
+    addToMemorySystem('crisis', 'User initiated crisis support chat');
     
     const chatHtml = `
         <div id="crisisChat" class="chat-modal-overlay">
@@ -2296,36 +3868,13 @@ async function startCrisisChat() {
                     </div>
                     
                     <div class="chat-messages" id="chatMessages">
-                        <div class="chat-message system">
-                            <div class="message-avatar system-avatar support-avatar">
-                                ${getSupportAvatarMarkup()}
-                            </div>
-                            <div class="message-content">
-                                <div class="message-header">
-                                    <span class="sender-name">Heal Hope Support</span>
-                                    <span class="message-time">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                </div>
-                                <div class="message-text">
-                                    <p><strong>🛡️ You're in a safe space</strong></p>
-                                    <p>This is a confidential crisis support chat. If you're in immediate danger, please call emergency services.</p>
-                                    <div class="emergency-actions">
-                                        <a href="tel:988" class="emergency-btn">📞 Call 988</a>
-                                        <a href="tel:911" class="emergency-btn">🚨 Call 911</a>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="typing-indicator" id="typingIndicator" style="display: none;">
-                            <div class="typing-avatar support-avatar">
-                                ${getSupportAvatarMarkup()}
-                            </div>
-                            <div class="typing-content">
-                                <div class="typing-dots">
-                                    <span></span>
-                                    <span></span>
-                                    <span></span>
-                                </div>
-                                <span class="typing-text">Support Assistant is typing...</span>
+                        <!-- Typing indicator -->
+                        <div id="typingIndicator" style="display:none;align-items:flex-end;gap:10px;margin-bottom:16px;">
+                            <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#10b981,#059669);display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;flex-shrink:0;">🤝</div>
+                            <div style="background:#fff;padding:12px 18px;border-radius:18px 18px 18px 4px;box-shadow:0 2px 12px rgba(0,0,0,0.08);border:1px solid #f1f5f9;display:flex;align-items:center;gap:6px;">
+                                <span style="width:7px;height:7px;background:#10b981;border-radius:50%;animation:typing-bounce 1.2s infinite 0s;display:inline-block;"></span>
+                                <span style="width:7px;height:7px;background:#10b981;border-radius:50%;animation:typing-bounce 1.2s infinite 0.2s;display:inline-block;"></span>
+                                <span style="width:7px;height:7px;background:#10b981;border-radius:50%;animation:typing-bounce 1.2s infinite 0.4s;display:inline-block;"></span>
                             </div>
                         </div>
                     </div>
@@ -2382,9 +3931,23 @@ async function startCrisisChat() {
         });
     }
     
-    // Connect to WebSocket
+    // Inject typing bounce animation
+    if (!document.getElementById('chatBounceStyle')) {
+        const s = document.createElement('style');
+        s.id = 'chatBounceStyle';
+        s.textContent = `@keyframes typing-bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}}`;
+        document.head.appendChild(s);
+    }
+
+    // Connect to WebSocket (chat still works via HTTP if this fails)
     connectToSupportChat();
-    
+
+    // Enable input immediately so HTTP fallback works right away
+    const initialInput = document.getElementById('chatInput');
+    const initialBtn = document.getElementById('sendBtn');
+    if (initialInput) initialInput.disabled = false;
+    if (initialBtn) initialBtn.disabled = false;
+
     console.log('Crisis chat modal created successfully');
 }
 
@@ -2392,51 +3955,67 @@ async function startCrisisChat() {
 function connectToSupportChat() {
     const userId = currentUser?.id || currentUser?.username || 'demo';
     const wsPath = `${CHAT_WS_URL}/ws/crisis/${userId}/`;
-    
+
+    const enableInputs = () => {
+        const inp = document.getElementById('chatInput');
+        const btn = document.getElementById('sendBtn');
+        if (inp) inp.disabled = false;
+        if (btn) btn.disabled = false;
+    };
+
+    // Show welcome only in HTTP mode (WS sends its own welcome from backend)
+    const showHttpWelcome = () => {
+        addChatMessage({
+            content: "Hi, I'm glad you're here. Take your time — share whatever feels right, and I'll do my best to support you.",
+            created_at: new Date().toISOString()
+        }, 'bot');
+    };
+
     try {
         chatSocket = new WebSocket(wsPath);
-        
-        chatSocket.onopen = function(e) {
-            console.log('Crisis chat connected');
-            updateChatStatus('connected', 'Connected securely');
-            document.getElementById('chatInput').disabled = false;
-            document.getElementById('sendBtn').disabled = false;
-            reconnectAttempts = 0;
-        };
-        
-        chatSocket.onmessage = function(e) {
-            const data = JSON.parse(e.data);
-            handleChatMessage(data);
-        };
-        
-        chatSocket.onclose = function(e) {
-            console.log('Crisis chat disconnected');
-            updateChatStatus('disconnected', 'Disconnected');
-            document.getElementById('chatInput').disabled = true;
-            document.getElementById('sendBtn').disabled = true;
-            
-            // Attempt to reconnect
-            if (reconnectAttempts < maxReconnectAttempts) {
-                setTimeout(() => {
-                    reconnectAttempts++;
-                    updateChatStatus('connecting', `Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`);
-                    connectToSupportChat();
-                }, 2000 * reconnectAttempts);
-            } else {
-                updateChatStatus('error', 'Connection failed');
-                showFallbackSupport();
+
+        const wsTimeout = setTimeout(() => {
+            if (chatSocket.readyState !== WebSocket.OPEN) {
+                chatSocket.onclose = null;
+                chatSocket.onerror = null;
+                chatSocket.close();
+                chatSocket = null;
+                updateChatStatus('connected', 'Connected');
+                enableInputs();
+                showHttpWelcome();
             }
+        }, 3000);
+
+        chatSocket.onopen = () => {
+            clearTimeout(wsTimeout);
+            updateChatStatus('connected', 'Connected securely');
+            enableInputs();
         };
-        
-        chatSocket.onerror = function(e) {
-            console.error('Crisis chat error:', e);
-            updateChatStatus('error', 'Connection error');
-            showFallbackSupport();
+
+        chatSocket.onmessage = (e) => {
+            try { handleChatMessage(JSON.parse(e.data)); } catch {}
         };
-        
-    } catch (error) {
-        console.error('Failed to create WebSocket connection:', error);
-        showFallbackSupport();
+
+        chatSocket.onclose = () => {
+            clearTimeout(wsTimeout);
+            chatSocket = null;
+            updateChatStatus('connected', 'Connected');
+            enableInputs();
+        };
+
+        chatSocket.onerror = () => {
+            clearTimeout(wsTimeout);
+            chatSocket = null;
+            updateChatStatus('connected', 'Connected');
+            enableInputs();
+            showHttpWelcome();
+        };
+
+    } catch {
+        chatSocket = null;
+        updateChatStatus('connected', 'Connected');
+        enableInputs();
+        showHttpWelcome();
     }
 }
 
@@ -2512,28 +4091,71 @@ function handleChatMessage(data) {
 
 async function sendChatMessage() {
     const input = document.getElementById('chatInput');
+    const sendBtn = document.getElementById('sendBtn');
     const message = input.value.trim();
-    
-    if (!message || !chatSocket || chatSocket.readyState !== WebSocket.OPEN) {
-        if (!chatSocket || chatSocket.readyState !== WebSocket.OPEN) {
-            showNotification('Chat is not connected. Please wait for reconnection.', 'error');
-        }
+    if (!message) return;
+
+    // Prevent duplicate sends
+    if (sendBtn) { sendBtn.disabled = true; sendBtn.style.opacity = '0.5'; }
+    input.value = '';
+
+    // Track in history
+    chatHistory.push({ role: 'user', content: message });
+
+    addChatMessage({
+        content: message,
+        sender: { id: currentUser?.id || 'me', username: currentUser?.username || 'You' },
+        created_at: new Date().toISOString()
+    }, 'user');
+    input.value = '';
+
+    // ── WebSocket path ────────────────────────────────────────────────────
+    if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+        chatSocket.send(JSON.stringify({
+            type: 'chat_message',
+            message,
+            history: chatHistory.slice(-12), // last 6 turns
+            include_memory: true,
+            use_rag: true
+        }));
+        showTypingIndicator();
         return;
     }
-    
-    // Add user message to memory system for context
-    await addToMemorySystem('crisis_chat', `User message: ${message}`);
-    
-    // Send message to server with memory context
-    chatSocket.send(JSON.stringify({
-        'type': 'chat_message',
-        'message': message,
-        'include_memory': true,
-        'use_rag': true
-    }));
-    
-    input.value = '';
+
+    // ── HTTP fallback path ───────────────────────────────────────────────
     showTypingIndicator();
+    try {
+        const resp = await fetch(API_ENDPOINTS.chat.ai_chat, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify({ message, history: chatHistory.slice(-12) })
+        });
+        hideTypingIndicator();
+        if (resp.ok) {
+            const data = await resp.json();
+            const reply = data.response || "I'm here to support you. Could you tell me more?";
+            chatHistory.push({ role: 'assistant', content: reply });
+            addChatMessage({
+                content: reply,
+                sender: { id: 'ai', username: 'MindWell', first_name: 'MindWell', last_name: '' },
+                created_at: new Date().toISOString()
+            }, 'bot');
+            if (data.is_crisis) showCrisisResources();
+        } else {
+            addChatMessage({
+                content: "I'm here with you. Could you tell me more about how you're feeling right now?",
+                sender: { id: 'ai', username: 'MindWell', first_name: 'MindWell', last_name: '' },
+                created_at: new Date().toISOString()
+            }, 'bot');
+        }
+    } catch (err) {
+        hideTypingIndicator();
+        addChatMessage({
+            content: "I'm having trouble connecting. If you're in crisis, please call or text **988** right now.",
+            sender: { id: 'ai', username: 'MindWell', first_name: 'MindWell', last_name: '' },
+            created_at: new Date().toISOString()
+        }, 'bot');
+    }
 }
 
 function sendQuickMessage(message) {
@@ -2544,36 +4166,41 @@ function sendQuickMessage(message) {
 
 function addChatMessage(messageData, senderType) {
     const chatMessages = document.getElementById('chatMessages');
-    
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `chat-message ${senderType}`;
-    
-    const timestamp = new Date(messageData.created_at || Date.now());
-    const timeString = timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    
+    if (!chatMessages) return;
+
+    const timeString = new Date(messageData.created_at || Date.now())
+        .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const wrap = document.createElement('div');
+    wrap.style.cssText = `display:flex;align-items:${senderType === 'user' ? 'flex-end' : 'flex-start'};gap:10px;margin-bottom:16px;${senderType === 'user' ? 'flex-direction:row-reverse;' : ''}`;
+
     if (senderType === 'user') {
-        messageDiv.innerHTML = `
-            <div class="message-content">
-                <p>${escapeHtml(messageData.content)}</p>
-                <span class="message-time">${timeString}</span>
-            </div>
-            <div class="message-avatar">
-                <i class="fas fa-user"></i>
-            </div>
-        `;
-    } else if (senderType === 'bot') {
-        messageDiv.innerHTML = `
-            <div class="message-avatar support-avatar">
-                ${getSupportAvatarMarkup()}
-            </div>
-            <div class="message-content">
-                <p>${formatBotMessage(messageData.content)}</p>
-                <span class="message-time">${timeString}</span>
-            </div>
-        `;
+        // User initial avatar
+        const name = currentUser?.first_name || currentUser?.firstName || 'Y';
+        const initials = name.charAt(0).toUpperCase();
+        wrap.innerHTML = `
+            <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;flex-shrink:0;">${initials}</div>
+            <div style="max-width:70%;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;padding:12px 16px;border-radius:18px 18px 4px 18px;box-shadow:0 2px 8px rgba(99,102,241,0.25);">
+                <p style="margin:0;font-size:14px;line-height:1.5;word-break:break-word;">${escapeHtml(messageData.content)}</p>
+                <span style="display:block;text-align:right;font-size:11px;opacity:0.75;margin-top:4px;">${timeString}</span>
+            </div>`;
+    } else {
+        wrap.innerHTML = `
+            <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#10b981,#059669);display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;flex-shrink:0;">🤝</div>
+            <div style="max-width:75%;background:#fff;color:#1e293b;padding:14px 18px;border-radius:18px 18px 18px 4px;box-shadow:0 2px 12px rgba(0,0,0,0.08);border:1px solid #f1f5f9;">
+                <div style="font-size:11px;font-weight:600;color:#10b981;margin-bottom:6px;">MindWell Support</div>
+                <div style="font-size:14px;line-height:1.6;word-break:break-word;">${formatBotMessage(messageData.content)}</div>
+                <span style="display:block;font-size:11px;color:#94a3b8;margin-top:6px;">${timeString}</span>
+            </div>`;
     }
-    
-    chatMessages.appendChild(messageDiv);
+
+    // Insert before typing indicator so it always stays last
+    const typingIndicator = document.getElementById('typingIndicator');
+    if (typingIndicator) {
+        chatMessages.insertBefore(wrap, typingIndicator);
+    } else {
+        chatMessages.appendChild(wrap);
+    }
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
@@ -2586,9 +4213,10 @@ function showTypingIndicator() {
 
 function hideTypingIndicator() {
     const typingIndicator = document.getElementById('typingIndicator');
-    if (typingIndicator) {
-        typingIndicator.style.display = 'none';
-    }
+    if (typingIndicator) typingIndicator.style.display = 'none';
+    // Re-enable send button when response arrives
+    const sendBtn = document.getElementById('sendBtn');
+    if (sendBtn) { sendBtn.disabled = false; sendBtn.style.opacity = '1'; }
 }
 
 function addCrisisAlert(data) {
@@ -2626,55 +4254,64 @@ function addCrisisAlert(data) {
 
 function showCrisisResources() {
     const chatMessages = document.getElementById('chatMessages');
-    
-    const resourcesDiv = document.createElement('div');
-    resourcesDiv.className = 'chat-message resources';
-    resourcesDiv.innerHTML = `
-        <div class="resources-content">
-            <h4>🛟 Crisis Resources</h4>
-            <div class="resource-grid">
-                <a href="tel:988" class="resource-card">
-                    <i class="fas fa-phone"></i>
-                    <span>988 Lifeline</span>
+    if (!chatMessages) return;
+
+    const div = document.createElement('div');
+    div.style.cssText = 'margin-bottom:16px;';
+    div.innerHTML = `
+        <div style="background:#fff;border:1px solid #f1f5f9;border-radius:16px;padding:16px 18px;box-shadow:0 2px 12px rgba(0,0,0,0.06);">
+            <p style="margin:0 0 12px;font-size:13px;font-weight:700;color:#dc2626;">🛟 Immediate Support Resources</p>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+                <a href="tel:9152987821" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fef2f2;border-radius:10px;text-decoration:none;color:#1e293b;">
+                    <span style="font-size:16px;">📞</span>
+                    <div><div style="font-size:13px;font-weight:600;">iCall India</div><div style="font-size:11px;color:#64748b;">9152987821 · Free counselling · Mon–Sat 8am–10pm</div></div>
                 </a>
-                <a href="sms:741741&body=HOME" class="resource-card">
-                    <i class="fas fa-sms"></i>
-                    <span>Text HOME to 741741</span>
+                <a href="tel:18602662345" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fef2f2;border-radius:10px;text-decoration:none;color:#1e293b;">
+                    <span style="font-size:16px;">📞</span>
+                    <div><div style="font-size:13px;font-weight:600;">Vandrevala Foundation</div><div style="font-size:11px;color:#64748b;">1860-2662-345 · 24/7 · India</div></div>
                 </a>
-                <button onclick="viewCopingStrategies()" class="resource-card">
-                    <i class="fas fa-heart"></i>
-                    <span>Coping Strategies</span>
-                </button>
-                <button onclick="createSafetyPlan()" class="resource-card">
-                    <i class="fas fa-shield-alt"></i>
-                    <span>Safety Plan</span>
-                </button>
+                <a href="tel:9820466627" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fef2f2;border-radius:10px;text-decoration:none;color:#1e293b;">
+                    <span style="font-size:16px;">📞</span>
+                    <div><div style="font-size:13px;font-weight:600;">AASRA</div><div style="font-size:11px;color:#64748b;">9820466627 · 24/7 Suicide Prevention · India</div></div>
+                </a>
+                <a href="tel:112" style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#fee2e2;border-radius:10px;text-decoration:none;color:#1e293b;">
+                    <span style="font-size:16px;">🚨</span>
+                    <div><div style="font-size:13px;font-weight:600;">Emergency Services</div><div style="font-size:11px;color:#64748b;">112 · All emergencies · India</div></div>
+                </a>
             </div>
         </div>
     `;
-    
-    chatMessages.appendChild(resourcesDiv);
+
+    const typingIndicator = document.getElementById('typingIndicator');
+    if (typingIndicator) chatMessages.insertBefore(div, typingIndicator);
+    else chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
 function showFallbackSupport() {
+    // Keep chat input enabled so HTTP fallback still works
+    const chatInput = document.getElementById('chatInput');
+    const sendBtn = document.getElementById('sendBtn');
+    if (chatInput) chatInput.disabled = false;
+    if (sendBtn) sendBtn.disabled = false;
+
+    updateChatStatus('connecting', 'Using backup connection');
+
     const chatMessages = document.getElementById('chatMessages');
-    
+    if (!chatMessages) return;
+
     const fallbackDiv = document.createElement('div');
-    fallbackDiv.className = 'chat-message system';
     fallbackDiv.innerHTML = `
-        <div class="message-content">
-            <p><strong>⚠️ Connection Issue</strong></p>
-            <p>We're having trouble connecting to our live chat system. Please use these immediate resources:</p>
-            <div class="emergency-actions">
-                <a href="tel:988" class="emergency-btn">📞 Call 988 - Suicide & Crisis Lifeline</a>
-                <a href="tel:911" class="emergency-btn">🚨 Call 911 - Emergency Services</a>
-                <a href="sms:741741&body=HOME" class="emergency-btn">💬 Text HOME to 741741</a>
+        <div style="background:#fff8f0;border:1px solid #fed7aa;border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:#92400e;">
+            <p style="margin:0 0 6px;font-weight:600;">⚠️ Live connection unavailable — backup chat active</p>
+            <p style="margin:0 0 8px;font-size:12px;color:#b45309;">If you're in immediate danger:</p>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <a href="tel:988" style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:6px;text-decoration:none;font-size:11px;font-weight:600;">📞 988</a>
+                <a href="tel:911" style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:6px;text-decoration:none;font-size:11px;font-weight:600;">🚨 911</a>
+                <a href="sms:741741&body=HOME" style="background:#dc2626;color:#fff;padding:4px 10px;border-radius:6px;text-decoration:none;font-size:11px;font-weight:600;">💬 Text 741741</a>
             </div>
-            <button onclick="connectToSupportChat()" class="btn btn-primary btn-sm">Try Reconnecting</button>
         </div>
     `;
-    
     chatMessages.appendChild(fallbackDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -2810,7 +4447,7 @@ function saveSafetyPlan(form) {
         lastModified: new Date().toISOString()
     };
     
-    localStorage.setItem('healhope_safety_plan', JSON.stringify(safetyPlan));
+    localStorage.setItem('mindwell_safety_plan', JSON.stringify(safetyPlan));
     showNotification('Safety plan saved successfully!', 'success');
     closeSafetyPlan();
 }
@@ -2882,8 +4519,8 @@ function viewCopingStrategies() {
                     <div class="emergency-note">
                         <p><strong>Remember:</strong> If you're having thoughts of self-harm, please reach out for immediate help:</p>
                         <div class="emergency-contacts">
-                            <a href="tel:988" class="btn btn-danger">Call 988</a>
-                            <a href="tel:911" class="btn btn-warning">Call 911</a>
+                            <a href="tel:9152987821" class="btn btn-danger">iCall: 9152987821</a>
+                            <a href="tel:112" class="btn btn-warning">Emergency: 112</a>
                         </div>
                     </div>
                 </div>
@@ -2909,21 +4546,26 @@ function contactSupports() {
                 </div>
                 <div class="contacts-content">
                     <div class="contact-section">
-                        <h3>🚨 Crisis Hotlines</h3>
+                        <h3>🚨 Crisis Helplines — India</h3>
                         <div class="contact-item">
-                            <h4>National Suicide Prevention Lifeline</h4>
-                            <a href="tel:988" class="contact-number">988</a>
-                            <p>24/7 free and confidential support</p>
+                            <h4>iCall India</h4>
+                            <a href="tel:9152987821" class="contact-number">9152987821</a>
+                            <p>Free counselling · Mon–Sat 8am–10pm</p>
                         </div>
                         <div class="contact-item">
-                            <h4>Crisis Text Line</h4>
-                            <span class="contact-number">Text HOME to 741741</span>
-                            <p>24/7 crisis support via text</p>
+                            <h4>Vandrevala Foundation</h4>
+                            <a href="tel:18602662345" class="contact-number">1860-2662-345</a>
+                            <p>Free mental health support · 24/7</p>
                         </div>
                         <div class="contact-item">
-                            <h4>National Alliance on Mental Illness</h4>
-                            <a href="tel:18009506264" class="contact-number">1-800-950-NAMI</a>
-                            <p>Information and referral services</p>
+                            <h4>AASRA</h4>
+                            <a href="tel:9820466627" class="contact-number">9820466627</a>
+                            <p>Suicide prevention · 24/7</p>
+                        </div>
+                        <div class="contact-item">
+                            <h4>Emergency Services</h4>
+                            <a href="tel:112" class="contact-number">112</a>
+                            <p>All emergencies · 24/7</p>
                         </div>
                     </div>
                     
@@ -2988,22 +4630,29 @@ async function initializeAllData() {
 async function loadJournalDataFromBackend() {
     try {
         const response = await fetch(API_ENDPOINTS.journal.entries, {
-            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             }
         });
         
         if (response.ok) {
             const data = await response.json();
-            if (data.success) {
-                localStorage.setItem('healhope_journal_entries', JSON.stringify(data.entries));
-                console.log('Loaded journal entries from backend:', data.entries.length);
+            if (data.success && Array.isArray(data.entries)) {
+                const deletedDates = getDeletedJournalDates();
+                const filtered = data.entries.filter(e =>
+                    !deletedDates.includes((e.date || '').substring(0, 10))
+                );
+                const key = getUserSpecificKey('mindwell_journal_entries');
+                localStorage.setItem(key, JSON.stringify(filtered));
+                if (!filtered.length) initializeJournal();
+            } else {
+                initializeJournal();
             }
         }
     } catch (error) {
         console.error('Failed to load journal data from backend:', error);
-        initializeJournal(); // Fallback
+        initializeJournal();
     }
 }
 
@@ -3011,16 +4660,17 @@ async function loadJournalDataFromBackend() {
 async function loadGoalsDataFromBackend() {
     try {
         const response = await fetch(API_ENDPOINTS.goals.list, {
-            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             }
         });
         
         if (response.ok) {
             const data = await response.json();
             if (data.success) {
-                localStorage.setItem('healhope_goals', JSON.stringify(data.goals));
+                const goalsKey = getUserSpecificKey('mindwell_goals');
+                localStorage.setItem(goalsKey, JSON.stringify(data.goals));
                 console.log('Loaded goals from backend:', data.goals.length);
             }
         }
@@ -3035,9 +4685,9 @@ async function sendAIChatMessage(message, context = {}) {
     try {
         const response = await fetch(API_ENDPOINTS.chat.ai_chat, {
             method: 'POST',
-            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             },
             body: JSON.stringify({
                 message: message,
@@ -3065,9 +4715,9 @@ async function getPersonalizedRecommendations() {
     try {
         const response = await fetch(`${API_BASE_URL}/chat/recommendations/`, {
             method: 'POST',
-            credentials: 'include',
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             },
             body: JSON.stringify({
                 use_memory: true,
@@ -3120,7 +4770,7 @@ function displayPersonalizedRecommendations(recommendations) {
 }
 
 function initializeCommunity() {
-    if (!localStorage.getItem('healhope_community_posts')) {
+    if (!localStorage.getItem('mindwell_community_posts')) {
         const samplePosts = [
             {
                 id: 1,
@@ -3143,12 +4793,12 @@ function initializeCommunity() {
                 isAnonymous: false
             }
         ];
-        localStorage.setItem('healhope_community_posts', JSON.stringify(samplePosts));
+        localStorage.setItem('mindwell_community_posts', JSON.stringify(samplePosts));
     }
 }
 
 function initializeResources() {
-    if (!localStorage.getItem('healhope_resources')) {
+    if (!localStorage.getItem('mindwell_resources')) {
         const sampleResources = [
             {
                 id: 1,
@@ -3173,32 +4823,32 @@ function initializeResources() {
                 featured: true
             }
         ];
-        localStorage.setItem('healhope_resources', JSON.stringify(sampleResources));
+        localStorage.setItem('mindwell_resources', JSON.stringify(sampleResources));
     }
 }
 
 function initializeAppointments() {
-    if (!localStorage.getItem('healhope_appointments')) {
+    if (!localStorage.getItem('mindwell_appointments')) {
         const sampleAppointments = [
             {
                 id: 1,
                 therapist: "dr-sarah-smith",
                 therapistName: "Dr. Sarah Smith",
                 type: "individual",
-                date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                date: localDateStr(new Date(Date.now() + 86400000)),
                 time: "14:00",
                 format: "video",
                 status: "scheduled",
                 notes: "Follow-up on anxiety management techniques"
             }
         ];
-        localStorage.setItem('healhope_appointments', JSON.stringify(sampleAppointments));
+        localStorage.setItem('mindwell_appointments', JSON.stringify(sampleAppointments));
     }
 }
 
 // Enhanced Analytics and Insights
 function generateMoodInsights() {
-    const moodData = JSON.parse(localStorage.getItem('healhope_mood_data') || '[]');
+    const moodData = JSON.parse(localStorage.getItem('mindwell_mood_data') || '[]');
     if (moodData.length < 7) return null;
     
     const insights = {
@@ -3241,22 +4891,17 @@ function getCommonMoodFactors(moodData) {
 
 // Enhanced Tab Loading Functions
 function loadMeditationData() {
-    const meditationStats = JSON.parse(localStorage.getItem('healhope_meditation_stats') || '{}');
+    const meditationStats = JSON.parse(localStorage.getItem('mindwell_meditation_stats') || '{}');
     updateMeditationStats(meditationStats);
 }
 
 function loadAppointmentsData() {
-    const appointments = JSON.parse(localStorage.getItem('healhope_appointments') || '[]');
+    const appointments = JSON.parse(localStorage.getItem('mindwell_appointments') || '[]');
     updateAppointmentsList(appointments);
 }
 
-function loadCommunityData() {
-    const posts = JSON.parse(localStorage.getItem('healhope_community_posts') || '[]');
-    updateCommunityFeed(posts);
-}
-
 function loadResourcesData() {
-    const resources = JSON.parse(localStorage.getItem('healhope_resources') || '[]');
+    const resources = JSON.parse(localStorage.getItem('mindwell_resources') || '[]');
     updateResourcesGrid(resources);
 }
 
@@ -3310,31 +4955,52 @@ function updateAppointmentsList(appointments) {
 function updateCommunityFeed(posts) {
     const postsFeed = document.querySelector('.posts-feed');
     if (!postsFeed) return;
-    
+
     postsFeed.innerHTML = '';
-    
-    posts.slice(0, 10).forEach(post => {
-        const postCard = document.createElement('div');
-        postCard.className = 'post-card';
-        postCard.innerHTML = `
-            <div class="post-header">
-                <img src="https://ui-avatars.com/api/?name=${post.author}&background=6366f1&color=fff" alt="User" class="post-avatar">
-                <div class="post-meta">
-                    <h4>${post.author}</h4>
-                    <span>${getTimeAgo(post.timestamp)} • ${post.category}</span>
-                </div>
-            </div>
-            <div class="post-content">
-                <p>${post.content}</p>
-            </div>
-            <div class="post-actions">
-                <button class="post-btn" onclick="likePost(${post.id})"><i class="fas fa-heart"></i> ${post.likes}</button>
-                <button class="post-btn" onclick="commentOnPost(${post.id})"><i class="fas fa-comment"></i> ${post.comments}</button>
-                <button class="post-btn"><i class="fas fa-share"></i> Share</button>
-            </div>
-        `;
-        postsFeed.appendChild(postCard);
+
+    if (!posts || posts.length === 0) {
+        postsFeed.innerHTML = '<p style="color:#94a3b8;text-align:center;padding:24px;">No posts yet. Be the first to share!</p>';
+        return;
+    }
+
+    posts.slice(0, 50).forEach(post => {
+        postsFeed.appendChild(buildPostCard(post));
     });
+}
+
+function buildPostCard(post) {
+    const authorName = post.author || 'Anonymous';
+    const avatarColor = post.is_anonymous ? '94a3b8' : '6366f1';
+    const likeCount = post.like_count ?? post.likes ?? 0;
+    const isLiked = post.is_liked || false;
+    const category = post.category || post.category_key || 'General Support';
+    const timestamp = post.created_at || post.timestamp || new Date().toISOString();
+
+    const card = document.createElement('div');
+    card.className = 'post-card';
+    card.setAttribute('data-post-id', post.id);
+    card.innerHTML = `
+        <div class="post-header">
+            <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(authorName)}&background=${avatarColor}&color=fff" alt="${escapeHtml(authorName)}" class="post-avatar">
+            <div class="post-meta">
+                <h4>${escapeHtml(authorName)}</h4>
+                <span>${getTimeAgo(timestamp)} · ${escapeHtml(category)}</span>
+            </div>
+        </div>
+        <div class="post-content">
+            <p>${escapeHtml(post.content)}</p>
+        </div>
+        <div class="post-actions">
+            <button class="post-btn like-btn${isLiked ? ' liked' : ''}" onclick="likePost(${post.id})">
+                <i class="fas fa-heart"></i> ${likeCount}
+            </button>
+            <button class="post-btn" onclick="commentOnPost(${post.id})">
+                <i class="fas fa-comment"></i> 0
+            </button>
+            <button class="post-btn"><i class="fas fa-share"></i> Share</button>
+        </div>
+    `;
+    return card;
 }
 
 function updateResourcesGrid(resources) {
@@ -3370,22 +5036,20 @@ function updateResourcesGrid(resources) {
 
 // Utility functions for new features
 function formatDate(dateString) {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-    });
-}
-
-function likePost(postId) {
-    const posts = JSON.parse(localStorage.getItem('healhope_community_posts') || '[]');
-    const post = posts.find(p => p.id === postId);
-    if (post) {
-        post.likes += 1;
-        localStorage.setItem('healhope_community_posts', JSON.stringify(posts));
-        loadCommunityData();
+    if (!dateString) return '';
+    // For date-only strings (YYYY-MM-DD), parse as local noon to avoid timezone shift
+    const s = String(dateString);
+    let date;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+        const [y, m, d] = s.split('-').map(Number);
+        date = new Date(y, m - 1, d, 12);
+    } else {
+        date = new Date(s);
     }
+    if (isNaN(date.getTime())) return dateString;
+    return date.toLocaleDateString('en-US', {
+        year: 'numeric', month: 'long', day: 'numeric'
+    });
 }
 
 function commentOnPost(postId) {
@@ -3420,8 +5084,9 @@ function logout() {
     localStorage.removeItem('loginTime');
     localStorage.removeItem('isDemoAccount');
     localStorage.removeItem('userMode');
-    localStorage.removeItem('healhope_user');
-    sessionStorage.removeItem('healhope_user');
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('mindwell_user');
+    sessionStorage.removeItem('mindwell_user');
     window.location.href = 'index.html';
 }
 
@@ -3438,7 +5103,7 @@ function createTestRealUser() {
         username: 'yasmeen.naaz',
         firstName: 'Yasmeen',
         lastName: 'Naaz',
-        email: 'admin@healhope.com'
+        email: 'admin@mindwell.com'
     };
     
     isLoggedIn = true;
@@ -3469,7 +5134,7 @@ function createDemoUser() {
         username: 'demo',
         firstName: 'Yasmeen',
         lastName: 'Demo',
-        email: 'yasmeen.demo@healhope.com'
+        email: 'yasmeen.demo@mindwell.com'
     };
     
     isLoggedIn = true;
@@ -3484,49 +5149,49 @@ function createDemoUser() {
     // Create comprehensive demo data with user-specific keys
     const demoMoodData = [
         {
-            date: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            date: localDateStr(new Date(Date.now() - 6*86400000)),
             mood: 'neutral',
             score: 6,
             note: '',
             factors: ['Sleep']
         },
         {
-            date: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            date: localDateStr(new Date(Date.now() - 5*86400000)),
             mood: 'good',
             score: 8,
             note: 'Had a good therapy session',
             factors: ['Therapy', 'Exercise']
         },
         {
-            date: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            date: localDateStr(new Date(Date.now() - 4*86400000)),
             mood: 'sad',
             score: 4,
             note: 'Feeling stressed about work',
             factors: ['Work', 'Stress']
         },
         {
-            date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            date: localDateStr(new Date(Date.now() - 3*86400000)),
             mood: 'neutral',
             score: 6,
             note: '',
             factors: ['Sleep']
         },
         {
-            date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            date: localDateStr(new Date(Date.now() - 2*86400000)),
             mood: 'good',
             score: 8,
             note: 'Meditation helped a lot',
             factors: ['Meditation', 'Exercise']
         },
         {
-            date: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            date: localDateStr(new Date(Date.now() - 86400000)),
             mood: 'very-good',
             score: 10,
             note: 'Great day with friends',
             factors: ['Social', 'Exercise']
         },
         {
-            date: new Date().toISOString().split('T')[0],
+            date: localDateStr(),
             mood: 'good',
             score: 8,
             note: 'Feeling good today! The meditation really helped.',
@@ -3568,10 +5233,10 @@ function createDemoUser() {
     ];
     
     // Store demo data with user-specific keys
-    const moodDataKey = getUserSpecificKey('healhope_mood_data');
-    const activitiesKey = getUserSpecificKey('healhope_activities');
-    const goalsKey = getUserSpecificKey('healhope_goals');
-    const journalKey = getUserSpecificKey('healhope_journal_entries');
+    const moodDataKey = getUserSpecificKey('mindwell_mood_data');
+    const activitiesKey = getUserSpecificKey('mindwell_activities');
+    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const journalKey = getUserSpecificKey('mindwell_journal_entries');
     
     localStorage.setItem(moodDataKey, JSON.stringify(demoMoodData));
     localStorage.setItem(activitiesKey, JSON.stringify(demoActivities));
@@ -3587,8 +5252,8 @@ function createDemoUser() {
             targetValue: 30,
             currentValue: 7,
             unit: "days",
-            startDate: new Date().toISOString().split('T')[0],
-            endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            startDate: localDateStr(),
+            endDate: localDateStr(new Date(Date.now() + 30*86400000)),
             status: "active",
             priority: "high",
             reminders: true,
@@ -3605,7 +5270,7 @@ function createDemoUser() {
             content: "Today I realized how much progress I've made over the past few months. The daily meditation is really helping me stay centered and focused. I'm grateful for the small wins.",
             mood: "good",
             tags: ["Progress", "Meditation", "Gratitude"],
-            date: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            date: localDateStr(new Date(Date.now() - 86400000)),
             wordCount: 45,
             isPrivate: false,
             createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
@@ -3641,6 +5306,7 @@ async function refreshUserData() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                ...getAuthHeaders()
             }
         });
         
@@ -3720,17 +5386,401 @@ function setupRefreshButton() {
 
 // Export functions to global scope
 window.switchTab = switchTab;
+window.logout = logout;
 window.saveMood = saveMood;
 window.startMeditation = startMeditation;
 window.startBreathing = startBreathing;
 window.showBookingModal = showBookingModal;
+
+// ── Coping Technique Modals ───────────────────────────────────────────────────
+
+// ─── Box Breathing Modal ──────────────────────────────────────────────────────
+let _bbRunning = false;
+let _bbPhase = 'inhale';
+let _bbCycles = 0;
+let _bbTimer = null;
+let _bbCountdownTimer = null;
+
+const BB_PHASES = [
+    { key: 'inhale',  label: 'Inhale',  duration: 4, instruction: 'Breathe in slowly through your nose...',       color: '#6366f1', scale: 1.35 },
+    { key: 'hold1',   label: 'Hold',    duration: 4, instruction: 'Hold your breath gently...',                   color: '#8b5cf6', scale: 1.35 },
+    { key: 'exhale',  label: 'Exhale',  duration: 4, instruction: 'Breathe out slowly through your mouth...',     color: '#06b6d4', scale: 1.0  },
+    { key: 'hold2',   label: 'Hold',    duration: 4, instruction: 'Hold — lungs empty, stay still...',            color: '#0ea5e9', scale: 1.0  },
+];
+let _bbPhaseIdx = 0;
+
+function openBoxBreathingModal() {
+    _openModal('boxBreathingModal');
+    _bbReset();
+}
+function closeBoxBreathingModal() {
+    _bbStop();
+    _closeModal('boxBreathingModal');
+}
+function _bbReset() {
+    _bbStop();
+    _bbCycles = 0;
+    _bbPhaseIdx = 0;
+    _bbRunning = false;
+    const circle = document.getElementById('bbCircle');
+    const ring   = document.getElementById('bbRing');
+    if (circle) { circle.style.transform = 'scale(1)'; circle.style.background = 'linear-gradient(135deg,#6366f1,#8b5cf6)'; }
+    if (ring)   { ring.style.animation = 'none'; }
+    _setText('bbPhaseLabel', 'Ready');
+    _setText('bbCountdown', '');
+    _setText('bbInstruction', 'Press Start to begin your session');
+    _setText('bbCycleCount', 'Cycles: 0');
+    _setText('bbStartBtn', '▶ Start');
+}
+function _bbStop() {
+    clearTimeout(_bbTimer);
+    clearTimeout(_bbCountdownTimer);
+    _bbRunning = false;
+}
+function toggleBoxBreathing() {
+    if (_bbRunning) {
+        _bbStop();
+        _setText('bbStartBtn', '▶ Resume');
+        _setText('bbInstruction', 'Paused — press Resume whenever you\'re ready.');
+    } else {
+        _bbRunning = true;
+        _setText('bbStartBtn', '⏸ Pause');
+        _bbRunPhase();
+    }
+}
+function _bbRunPhase() {
+    if (!_bbRunning) return;
+    const phase = BB_PHASES[_bbPhaseIdx];
+    const circle = document.getElementById('bbCircle');
+    const ring   = document.getElementById('bbRing');
+
+    _setText('bbPhaseLabel', phase.label);
+    _setText('bbInstruction', phase.instruction);
+    if (circle) {
+        circle.style.transition = `transform ${phase.duration * 0.9}s ease-in-out`;
+        circle.style.transform  = `scale(${phase.scale})`;
+        circle.style.background = `linear-gradient(135deg,${phase.color},${phase.color}cc)`;
+    }
+    if (ring) {
+        ring.style.animation = 'none';
+        void ring.offsetWidth; // reflow
+        ring.style.animation = `bbRingPulse ${phase.duration}s linear forwards`;
+        ring.style.borderColor = phase.color;
+    }
+
+    let remaining = phase.duration;
+    _setText('bbCountdown', remaining);
+    const tick = () => {
+        remaining -= 1;
+        if (remaining > 0) {
+            _setText('bbCountdown', remaining);
+            _bbCountdownTimer = setTimeout(tick, 1000);
+        } else {
+            _setText('bbCountdown', '');
+        }
+    };
+    _bbCountdownTimer = setTimeout(tick, 1000);
+
+    _bbTimer = setTimeout(() => {
+        if (!_bbRunning) return;
+        _bbPhaseIdx = (_bbPhaseIdx + 1) % BB_PHASES.length;
+        if (_bbPhaseIdx === 0) {
+            _bbCycles++;
+            _setText('bbCycleCount', `Cycles: ${_bbCycles}`);
+        }
+        _bbRunPhase();
+    }, phase.duration * 1000);
+}
+
+// ─── 5-4-3-2-1 Grounding Modal ────────────────────────────────────────────────
+const GROUNDING_STEPS = [
+    { num: 5, sense: 'SEE',   icon: 'fa-eye',        prompt: 'Look around and name 5 things you can see right now. Take your time with each one.' },
+    { num: 4, sense: 'FEEL',  icon: 'fa-hand-paper', prompt: 'Notice 4 things you can physically feel — your feet on the floor, your clothes on your skin...' },
+    { num: 3, sense: 'HEAR',  icon: 'fa-ear-listen', prompt: 'Listen carefully and identify 3 sounds around you. Near or far, obvious or subtle.' },
+    { num: 2, sense: 'SMELL', icon: 'fa-nose',       prompt: 'Notice 2 things you can smell. If you can\'t smell anything, think of 2 favourite scents.' },
+    { num: 1, sense: 'TASTE', icon: 'fa-utensils',   prompt: 'Bring your awareness to 1 thing you can taste, or simply notice the inside of your mouth.' },
+];
+let _groundingStep = 0;
+
+function openGroundingModal() {
+    _groundingStep = 0;
+    _openModal('groundingModal');
+    _renderGroundingStep();
+}
+function closeGroundingModal() {
+    _closeModal('groundingModal');
+}
+function _renderGroundingStep() {
+    const s = GROUNDING_STEPS[_groundingStep];
+    _setText('groundingNum', s.num);
+    document.getElementById('groundingSenseIcon').innerHTML = `<i class="fas ${s.icon}"></i>`;
+    _setText('groundingStepTitle', `Things you can ${s.sense}`);
+    _setText('groundingStepDesc', s.prompt);
+
+    // Dots
+    const dots = document.getElementById('groundingDots');
+    if (dots) {
+        dots.innerHTML = GROUNDING_STEPS.map((_, i) =>
+            `<span class="g-dot${i === _groundingStep ? ' active' : ''}"></span>`
+        ).join('');
+    }
+
+    // Buttons
+    const prev = document.getElementById('groundingPrevBtn');
+    const next = document.getElementById('groundingNextBtn');
+    if (prev) prev.style.display = _groundingStep > 0 ? 'inline-flex' : 'none';
+    if (next) {
+        if (_groundingStep === GROUNDING_STEPS.length - 1) {
+            next.textContent = '✓ Finish';
+            next.onclick = _groundingFinish;
+        } else {
+            next.textContent = 'Next →';
+            next.onclick = groundingNext;
+        }
+    }
+}
+function groundingNext() {
+    if (_groundingStep < GROUNDING_STEPS.length - 1) {
+        _groundingStep++;
+        _renderGroundingStep();
+    }
+}
+function groundingPrev() {
+    if (_groundingStep > 0) {
+        _groundingStep--;
+        _renderGroundingStep();
+    }
+}
+function _groundingFinish() {
+    const display = document.querySelector('#groundingModal .grounding-step-display');
+    if (display) {
+        display.innerHTML = `
+            <div style="text-align:center;padding:24px 0;">
+                <div style="font-size:48px;margin-bottom:12px;">🌿</div>
+                <h3 style="color:var(--primary-color);margin-bottom:8px;">Well done!</h3>
+                <p style="color:var(--gray-600);">You've completed the grounding exercise.<br>Take a moment to notice how you feel right now.</p>
+            </div>`;
+        document.getElementById('groundingNextBtn').style.display = 'none';
+        document.getElementById('groundingPrevBtn').style.display = 'none';
+        document.getElementById('groundingDots').style.display = 'none';
+    }
+}
+
+// ─── Ice Cube Timer ───────────────────────────────────────────────────────────
+let _iceRunning = false;
+let _iceSeconds = 30;
+let _iceInterval = null;
+
+function openIceCubeModal() {
+    _iceStop();
+    _iceSeconds = 30;
+    _setText('iceTimerDisplay', '0:30');
+    _setText('iceTimerBtn', '▶ Start Timer');
+    _openModal('iceCubeModal');
+}
+function closeIceCubeModal() {
+    _iceStop();
+    _closeModal('iceCubeModal');
+}
+function _iceStop() {
+    clearInterval(_iceInterval);
+    _iceRunning = false;
+}
+function toggleIceTimer() {
+    if (_iceRunning) {
+        _iceStop();
+        _setText('iceTimerBtn', '▶ Resume');
+    } else {
+        if (_iceSeconds <= 0) { _iceSeconds = 30; }
+        _iceRunning = true;
+        _setText('iceTimerBtn', '⏸ Pause');
+        _iceInterval = setInterval(() => {
+            _iceSeconds--;
+            const m = Math.floor(_iceSeconds / 60);
+            const s = _iceSeconds % 60;
+            _setText('iceTimerDisplay', `${m}:${s.toString().padStart(2, '0')}`);
+            if (_iceSeconds <= 0) {
+                _iceStop();
+                _setText('iceTimerDisplay', '✓ Done');
+                _setText('iceTimerBtn', '↺ Again');
+            }
+        }, 1000);
+    }
+}
+
+// Shared helper
+function _setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+}
+// Modal open/close — toggles body class so position:fixed escapes the
+// stacking context created by .dashboard-body's overflow:hidden
+function _openModal(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.display = 'flex';
+    document.body.classList.add('coping-modal-open');
+    // Close on Escape
+    const onKey = (e) => { if (e.key === 'Escape') { el.click(); document.removeEventListener('keydown', onKey); } };
+    document.addEventListener('keydown', onKey);
+}
+function _closeModal(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+    // Only remove class if no other modals are open
+    const anyOpen = document.querySelectorAll('.coping-modal[style*="flex"]').length > 0;
+    if (!anyOpen) document.body.classList.remove('coping-modal-open');
+}
 window.createNewGoal = createNewGoal;
 window.startCrisisChat = startCrisisChat;
 window.createSafetyPlan = createSafetyPlan;
 window.viewCopingStrategies = viewCopingStrategies;
 window.contactSupports = contactSupports;
 window.saveJournalEntry = saveJournalEntry;
+window.editJournalEntry = editJournalEntry;
+window.viewJournalEntry = viewJournalEntry;
+window.deleteJournalEntry = deleteJournalEntry;
+window.unmarkJournalDateDeleted = unmarkJournalDateDeleted;
+window.toggleJournalTag = toggleJournalTag;
+window.analyseEntryWithAI = analyseEntryWithAI;
 window.updateGoalProgress = updateGoalProgress;
+window.markGoalComplete = markGoalComplete;
+window.addSuggestedGoal = addSuggestedGoal;
+window.requestGoalReminders = requestGoalReminders;
+// Coping technique modals
+window.openBoxBreathingModal = openBoxBreathingModal;
+window.closeBoxBreathingModal = closeBoxBreathingModal;
+window.toggleBoxBreathing = toggleBoxBreathing;
+window.openGroundingModal = openGroundingModal;
+window.closeGroundingModal = closeGroundingModal;
+window.groundingNext = groundingNext;
+window.groundingPrev = groundingPrev;
+window.openIceCubeModal = openIceCubeModal;
+window.closeIceCubeModal = closeIceCubeModal;
+window.toggleIceTimer = toggleIceTimer;
+
+// ── Notification bell helpers ─────────────────────────────────────────────────
+window.toggleNotifPanel = function() {
+    const panel = document.getElementById('notifPanel');
+    if (!panel) return;
+    const visible = panel.style.display !== 'none';
+    panel.style.display = visible ? 'none' : 'block';
+    if (!visible) refreshNotifPanel();
+};
+
+window.enablePushFromBell = async function() {
+    await subscribeToPush();
+    await requestGoalReminders();
+    refreshNotifPanel();
+};
+
+window.disablePushFromBell = async function() {
+    if (!_swRegistration && 'serviceWorker' in navigator) {
+        _swRegistration = await navigator.serviceWorker.ready;
+    }
+    if (!_swRegistration) return;
+    const sub = await _swRegistration.pushManager.getSubscription();
+    if (sub) {
+        // Tell backend to remove subscription
+        try {
+            await fetch(`${API_BASE_URL}/users/push/unsubscribe/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                body: JSON.stringify({ endpoint: sub.endpoint })
+            });
+        } catch { /* best effort */ }
+        await sub.unsubscribe();
+    }
+    refreshNotifPanel();
+    showNotification('Goal reminders disabled.', 'info');
+};
+
+function refreshNotifPanel() {
+    const list = document.getElementById('notifList');
+    if (!list) return;
+    const goalsKey = getUserSpecificKey('mindwell_goals');
+    const goals    = JSON.parse(localStorage.getItem(goalsKey) || '[]');
+    const today    = new Date();
+    const items    = [];
+
+    goals.forEach(g => {
+        if (!g.reminders && !g.reminders === undefined) return;
+        const end      = g.endDate || g.end_date;
+        const daysLeft = end ? Math.ceil((new Date(end) - today) / 86400000) : null;
+        const pct      = g.target_value ? Math.round(((g.current_value || 0) / g.target_value) * 100) : 0;
+        let icon = '💪', color = '#4facfe', msg = `${pct}% complete`;
+
+        if (daysLeft !== null && daysLeft < 0)    { icon = '⚠️'; color = '#ef4444'; msg = `Overdue by ${Math.abs(daysLeft)}d`; }
+        else if (daysLeft !== null && daysLeft <= 3) { icon = '⏰'; color = '#f59e0b'; msg = `Due in ${daysLeft}d`; }
+
+        items.push(`
+            <div style="padding:12px 18px;border-bottom:1px solid #f8fafc;display:flex;gap:12px;align-items:flex-start;">
+                <span style="font-size:20px;">${icon}</span>
+                <div>
+                    <p style="margin:0;font-size:13px;font-weight:600;color:#374151;">${g.title}</p>
+                    <p style="margin:2px 0 0;font-size:12px;color:${color};">${msg}</p>
+                </div>
+            </div>
+        `);
+    });
+
+    list.innerHTML = items.length
+        ? items.join('')
+        : '<p style="text-align:center;color:#94a3b8;font-size:13px;padding:20px;">No active goal reminders</p>';
+
+    // Show badge if any overdue/due-soon
+    const badge = document.getElementById('notifBadge');
+    const urgent = goals.some(g => {
+        const end = g.endDate || g.end_date;
+        if (!end) return false;
+        return Math.ceil((new Date(end) - today) / 86400000) <= 3;
+    });
+    if (badge) badge.style.display = urgent ? 'block' : 'none';
+
+    // Update Enable/Disable button based on actual subscription state
+    const toggleBtn = document.getElementById('notifToggleBtn');
+    if (!toggleBtn) return;
+    const swReg = _swRegistration || (('serviceWorker' in navigator) ? navigator.serviceWorker.controller && navigator.serviceWorker.ready : null);
+    if (!swReg) {
+        toggleBtn.textContent = 'Enable';
+        toggleBtn.style.background = 'linear-gradient(135deg,#4facfe,#00f2fe)';
+        toggleBtn.style.color = '#fff';
+        toggleBtn.onclick = window.enablePushFromBell;
+        return;
+    }
+    Promise.resolve(swReg).then(reg => reg.pushManager.getSubscription()).then(sub => {
+        if (sub) {
+            toggleBtn.textContent = 'Disable';
+            toggleBtn.style.background = '#f1f5f9';
+            toggleBtn.style.color = '#64748b';
+            toggleBtn.onclick = window.disablePushFromBell;
+        } else {
+            toggleBtn.textContent = 'Enable';
+            toggleBtn.style.background = 'linear-gradient(135deg,#4facfe,#00f2fe)';
+            toggleBtn.style.color = '#fff';
+            toggleBtn.onclick = window.enablePushFromBell;
+        }
+    });
+}
+
+// Close panel when clicking outside
+document.addEventListener('click', e => {
+    const panel = document.getElementById('notifPanel');
+    const bell  = document.getElementById('notifBellBtn');
+    if (panel && bell && !panel.contains(e.target) && !bell.contains(e.target)) {
+        panel.style.display = 'none';
+    }
+});
+
+// Attach bell button click — script is at end of body so DOM is ready
+(function() {
+    const bell = document.getElementById('notifBellBtn');
+    if (bell) bell.addEventListener('click', function(e) {
+        e.stopPropagation();
+        window.toggleNotifPanel();
+    });
+})();
+window.deleteGoal = deleteGoal;
 window.closeCrisisChat = closeCrisisChat;
 window.closeSafetyPlan = closeSafetyPlan;
 window.closeCopingStrategies = closeCopingStrategies;

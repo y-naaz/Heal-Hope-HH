@@ -1,5 +1,18 @@
-// Heal Hope – Main Interactive JavaScript
-class HealHopeApp {
+// MindWell – Main Interactive JavaScript
+
+// Resolve backend origin.
+// On localhost: always use local backend (meta tag is ignored for local dev).
+// On any other host: use <meta name="api-base-url"> if present, else Render.
+const _mainIsLocal = ['localhost', '127.0.0.1', ''].includes(window.location.hostname);
+const _mainMetaApiUrl = document.querySelector('meta[name="api-base-url"]');
+const _mainMetaVal = !_mainIsLocal && _mainMetaApiUrl && _mainMetaApiUrl.content
+    ? _mainMetaApiUrl.content.replace(/\/$/, '')
+    : null;
+const API_BASE_URL = _mainIsLocal
+    ? 'http://localhost:8000'
+    : (_mainMetaVal || 'https://mindwell-backend.onrender.com');
+
+class MindWellApp {
     constructor() {
         this.isRealMode = false; // Start in demo mode
         this.user = null;
@@ -28,7 +41,7 @@ class HealHopeApp {
             first_name: 'Demo',
             last_name: 'User',
             full_name: 'Demo User',
-            email: 'demo@healhope.com',
+            email: 'demo@mindwell.com',
             username: 'demo'
         };
 
@@ -122,37 +135,55 @@ class HealHopeApp {
     }
 
     showLoginPrompt() {
-        const promptModal = `
-            <div id="loginPromptModal" class="modal active">
-                <div class="modal-content" style="max-width: 500px;">
-                    <div class="modal-header">
-                        <h2><i class="fas fa-user-lock"></i> Authentication Required</h2>
-                        <span class="close" onclick="closeModal('loginPromptModal')">&times;</span>
-                    </div>
-                    <div class="prompt-content">
-                        <div class="prompt-icon">
-                            <i class="fas fa-lock"></i>
-                        </div>
-                        <h3>Access Real User Mode</h3>
-                        <p>To access real user mode with your personal data and settings, please log in to your account.</p>
-                        
-                        <div class="prompt-actions">
-                            <button class="btn btn-primary" onclick="closeModal('loginPromptModal'); showLogin();">
-                                <i class="fas fa-sign-in-alt"></i> Login to Account
-                            </button>
-                            <button class="btn btn-outline" onclick="closeModal('loginPromptModal'); showSignup();">
-                                <i class="fas fa-user-plus"></i> Create Account
-                            </button>
-                            <button class="btn btn-outline btn-small" onclick="closeModal('loginPromptModal');">
-                                <i class="fas fa-times"></i> Stay in Demo Mode
-                            </button>
-                        </div>
+        // Remove any existing instance so we never get duplicate IDs
+        const existing = document.getElementById('loginPromptModal');
+        if (existing) existing.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'loginPromptModal';
+        modal.className = 'modal active';
+        modal.innerHTML = `
+            <div class="modal-content" style="max-width: 500px;">
+                <div class="modal-header">
+                    <h2><i class="fas fa-user-lock"></i> Authentication Required</h2>
+                    <span class="close">&times;</span>
+                </div>
+                <div class="prompt-content">
+                    <div class="prompt-icon"><i class="fas fa-lock"></i></div>
+                    <h3>Access Real User Mode</h3>
+                    <p>To access real user mode with your personal data and settings, please log in to your account.</p>
+                    <div class="prompt-actions">
+                        <button class="btn btn-primary" data-prompt-action="login">
+                            <i class="fas fa-sign-in-alt"></i> Login to Account
+                        </button>
+                        <button class="btn btn-outline" data-prompt-action="signup">
+                            <i class="fas fa-user-plus"></i> Create Account
+                        </button>
+                        <button class="btn btn-outline btn-small close">
+                            <i class="fas fa-times"></i> Stay in Demo Mode
+                        </button>
                     </div>
                 </div>
             </div>
         `;
-        
-        document.body.insertAdjacentHTML('beforeend', promptModal);
+
+        const dismiss = () => {
+            modal.remove();
+            document.body.style.overflow = '';
+        };
+
+        modal.querySelector('[data-prompt-action="login"]').addEventListener('click', (e) => {
+            e.stopPropagation();
+            dismiss();
+            window.showLogin();
+        });
+        modal.querySelector('[data-prompt-action="signup"]').addEventListener('click', (e) => {
+            e.stopPropagation();
+            dismiss();
+            window.showSignup();
+        });
+
+        document.body.appendChild(modal);
         document.body.style.overflow = 'hidden';
     }
 
@@ -168,27 +199,25 @@ class HealHopeApp {
         const userInfo = document.getElementById('userInfo');
         const demoIndicator = document.getElementById('demoIndicator');
 
-        if (this.isRealMode) {
-            // Real mode - check if user is authenticated
-            const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
-            
-            if (isAuthenticated) {
-                // Show user info
-                const userData = localStorage.getItem('user');
-                if (userData) {
-                    const user = JSON.parse(userData);
-                    this.showUserInfo(user);
-                }
-                if (authButtons) authButtons.style.display = 'none';
-                if (demoIndicator) demoIndicator.style.display = 'none';
-            } else {
-                // Show auth buttons
-                if (authButtons) authButtons.style.display = 'flex';
-                if (userInfo) userInfo.style.display = 'none';
-                if (demoIndicator) demoIndicator.style.display = 'none';
+        const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+        const isDemoAccount = localStorage.getItem('isDemoAccount') === 'true';
+        const isRealUser = isAuthenticated && !isDemoAccount;
+
+        if (isRealUser) {
+            // Real authenticated user — always show their info, hide login buttons
+            const userData = localStorage.getItem('user');
+            if (userData) {
+                this.showUserInfo(JSON.parse(userData));
             }
+            if (authButtons) authButtons.style.display = 'none';
+            if (demoIndicator) demoIndicator.style.display = 'none';
+        } else if (this.isRealMode) {
+            // Real mode but not authenticated — show login/signup buttons
+            if (authButtons) authButtons.style.display = 'flex';
+            if (userInfo) userInfo.style.display = 'none';
+            if (demoIndicator) demoIndicator.style.display = 'none';
         } else {
-            // Demo mode - show demo indicator
+            // Demo mode
             if (demoIndicator) demoIndicator.style.display = 'flex';
             if (authButtons) authButtons.style.display = 'none';
             if (userInfo) userInfo.style.display = 'none';
@@ -493,11 +522,9 @@ class HealHopeApp {
 
     // Modal System
     setupModals() {
-        const modals = document.querySelectorAll('.modal');
-        const closeBtns = document.querySelectorAll('.close');
-
-        // Close modal function
+        // Close modal function (also exposed globally below)
         const closeModal = (modal) => {
+            if (!modal) return;
             modal.classList.remove('active');
             document.body.style.overflow = '';
         };
@@ -511,39 +538,48 @@ class HealHopeApp {
             }
         };
 
-        // Close button events
-        closeBtns.forEach(btn => {
-            btn.addEventListener('click', () => {
+        // Single delegated listener for ALL close buttons (static + dynamic)
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('.close');
+            if (btn) {
                 const modal = btn.closest('.modal');
                 closeModal(modal);
-            });
+            }
         });
 
-        // Click outside to close
-        modals.forEach(modal => {
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) {
-                    closeModal(modal);
-                }
-            });
+        // Click directly on the modal backdrop (the dark overlay) to close.
+        // Using e.target === the .modal element itself prevents any bubbled click
+        // from a button inside one modal from accidentally closing a modal that
+        // was just opened by that same click (e.g. "Login to Account" flow).
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal') && e.target.classList.contains('active')) {
+                closeModal(e.target);
+            }
         });
 
         // Escape key to close
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 const activeModal = document.querySelector('.modal.active');
-                if (activeModal) {
-                    closeModal(activeModal);
-                }
+                closeModal(activeModal);
             }
         });
 
         // Expose modal functions globally
-        window.showLogin = () => openModal('loginModal');
+        window.showLogin = () => {
+            const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+            const isDemoAccount = localStorage.getItem('isDemoAccount') === 'true';
+            if (isAuthenticated && !isDemoAccount) {
+                // Real user already logged in — go to dashboard
+                window.location.href = 'dashboard.html';
+                return;
+            }
+            openModal('loginModal');
+        };
         window.showSignup = () => openModal('signupModal');
         window.closeModal = (modalId) => {
             const modal = document.getElementById(modalId);
-            if (modal) closeModal(modal);
+            closeModal(modal);
         };
         window.quickLogin = () => this.quickLogin();
 
@@ -581,7 +617,7 @@ class HealHopeApp {
         submitBtn.disabled = true;
 
         try {
-            const response = await fetch('http://localhost:8000/users/auth/login/', {
+            const response = await fetch(`${API_BASE_URL}/users/auth/login/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -596,36 +632,29 @@ class HealHopeApp {
 
             if (result.success) {
                 createNotification('Login successful! Redirecting to dashboard...', 'success');
-                
-                // Check if this is the demo user account
-                const isDemoAccount = data.email === 'demo@healhope.com' || 
-                                    result.user.email === 'demo@healhope.com' ||
-                                    result.user.username === 'demo';
-                
-                // Store user data with login timestamp
+
+                // Store token + user data
+                if (result.token) {
+                    localStorage.setItem('authToken', result.token);
+                }
                 localStorage.setItem('user', JSON.stringify(result.user));
                 localStorage.setItem('isAuthenticated', 'true');
                 localStorage.setItem('loginTime', Date.now().toString());
-                
-                // Set user mode based on whether it's demo account
-                if (isDemoAccount) {
-                    localStorage.setItem('userMode', 'demo');
-                    localStorage.setItem('isDemoAccount', 'true');
-                    createNotification('Logged in as demo user - you\'re in demo mode!', 'info');
-                } else {
-                    localStorage.setItem('userMode', 'real');
-                    localStorage.setItem('isDemoAccount', 'false');
-                }
-                
+                localStorage.setItem('userMode', 'real');
+                localStorage.setItem('isDemoAccount', 'false');
+
                 // Close modal and redirect
                 this.closeModal(document.getElementById('loginModal'));
-                
+
                 setTimeout(() => {
                     window.location.href = 'dashboard.html';
                 }, 1000);
                 
             } else {
                 createNotification(result.message || 'Login failed. Please try again.', 'error');
+                // If user not found, show the signup hint inside the modal
+                const hint = document.getElementById('loginSignupHint');
+                if (hint) hint.style.display = 'block';
             }
 
         } catch (error) {
@@ -637,50 +666,9 @@ class HealHopeApp {
         }
     }
 
-    // Quick login with hardcoded credentials  
-    async quickLogin() {
-        try {
-            const response = await fetch('http://localhost:8000/users/auth/login/', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    email: 'yasmeennaazogo@gmail.com',
-                    password: 'Naaz@951'
-                })
-            });
-
-            const result = await response.json();
-
-            if (result.success) {
-                createNotification('Login successful! Redirecting to dashboard...', 'success');
-                
-                // Store user data with login timestamp
-                localStorage.setItem('user', JSON.stringify(result.user));
-                localStorage.setItem('isAuthenticated', 'true');
-                localStorage.setItem('loginTime', Date.now().toString());
-                localStorage.setItem('userMode', 'real');
-                localStorage.setItem('isDemoAccount', 'false');
-                
-                // Close any open modals
-                const activeModal = document.querySelector('.modal.active');
-                if (activeModal) {
-                    this.closeModal(activeModal);
-                }
-                
-                setTimeout(() => {
-                    window.location.href = 'dashboard.html';
-                }, 1000);
-                
-            } else {
-                createNotification(result.message || 'Login failed. Please try again.', 'error');
-            }
-
-        } catch (error) {
-            console.error('Login error:', error);
-            createNotification('Network error. Please check your connection.', 'error');
-        }
+    // Try demo — opens dashboard in demo mode without real credentials
+    quickLogin() {
+        this.autoAuthenticate(true);
     }
 
     // Handle signup form submission
@@ -689,9 +677,17 @@ class HealHopeApp {
         const formData = new FormData(e.target);
         const data = Object.fromEntries(formData.entries());
 
-        // Basic validation
-        if (data.password.length < 6) {
-            createNotification('Password must be at least 6 characters long.', 'error');
+        // Validation
+        if (data.password.length < 8) {
+            createNotification('Password must be at least 8 characters long.', 'error');
+            return;
+        }
+        if (/\s/.test(data.password)) {
+            createNotification('Password must not contain spaces.', 'error');
+            return;
+        }
+        if (data.password !== data.confirmPassword) {
+            createNotification('Passwords do not match.', 'error');
             return;
         }
 
@@ -701,7 +697,7 @@ class HealHopeApp {
         submitBtn.disabled = true;
 
         try {
-            const response = await fetch('http://localhost:8000/users/auth/signup/', {
+            const response = await fetch(`${API_BASE_URL}/users/auth/signup/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -718,12 +714,15 @@ class HealHopeApp {
 
             if (result.success) {
                 createNotification('Account created successfully! Redirecting to dashboard...', 'success');
-                
-                // Store user data with login timestamp
+
+                // Store token + user data
+                if (result.token) {
+                    localStorage.setItem('authToken', result.token);
+                }
                 localStorage.setItem('user', JSON.stringify(result.user));
                 localStorage.setItem('isAuthenticated', 'true');
                 localStorage.setItem('loginTime', Date.now().toString());
-                
+
                 // Close modal and redirect
                 this.closeModal(document.getElementById('signupModal'));
                 
@@ -747,7 +746,9 @@ class HealHopeApp {
     // Check authentication status
     async checkAuthStatus() {
         try {
-            const response = await fetch('http://localhost:8000/users/auth/status/');
+            const token = localStorage.getItem('authToken');
+            const headers = token ? { 'Authorization': `Token ${token}` } : {};
+            const response = await fetch(`${API_BASE_URL}/users/auth/status/`, { headers });
             const result = await response.json();
 
             if (result.authenticated) {
@@ -1117,7 +1118,7 @@ document.head.appendChild(additionalStyles);
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
-    window.healHopeApp = new HealHopeApp();
+    window.mindWellApp = new MindWellApp();
 });
 
 // Handle page visibility changes for performance
@@ -1245,128 +1246,164 @@ function showBookingModal() {
     document.getElementById('bookingForm').addEventListener('submit', handleBookingSubmission);
 }
 
+window.handleAssessmentCTA = function handleAssessmentCTA() {
+    const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+    if (isAuthenticated) {
+        // Already logged in — go straight to dashboard
+        document.getElementById('resultsModal')?.remove();
+        document.body.style.overflow = '';
+        window.location.href = 'dashboard.html';
+    } else {
+        // Not logged in — close results and open login modal
+        document.getElementById('resultsModal')?.remove();
+        document.body.style.overflow = '';
+        window.showLogin();
+    }
+}
+
 function showSelfAssessmentModal() {
+    // Remove any stale instances so getElementById always finds the fresh one
+    ['assessmentModal', 'resultsModal'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+    });
+
+    const questions = [
+        // PHQ-9 (Depression)
+        { id: 'q1',  section: 'PHQ-9', category: 'Depression', text: 'Little interest or pleasure in doing things', icon: '😔' },
+        { id: 'q2',  section: 'PHQ-9', category: 'Depression', text: 'Feeling down, depressed, or hopeless', icon: '🌧️' },
+        { id: 'q3',  section: 'PHQ-9', category: 'Sleep', text: 'Trouble falling or staying asleep, or sleeping too much', icon: '😴' },
+        { id: 'q4',  section: 'PHQ-9', category: 'Energy', text: 'Feeling tired or having little energy', icon: '⚡' },
+        { id: 'q5',  section: 'PHQ-9', category: 'Appetite', text: 'Poor appetite or overeating', icon: '🍽️' },
+        { id: 'q6',  section: 'PHQ-9', category: 'Self-worth', text: 'Feeling bad about yourself — or that you are a failure or have let yourself or your family down', icon: '💭' },
+        { id: 'q7',  section: 'PHQ-9', category: 'Concentration', text: 'Trouble concentrating on things, such as reading or watching television', icon: '🧠' },
+        { id: 'q8',  section: 'PHQ-9', category: 'Movement', text: 'Moving or speaking so slowly that other people could have noticed — or being so fidgety or restless that you have been moving around a lot more than usual', icon: '🐢' },
+        { id: 'q9',  section: 'PHQ-9', category: 'Safety', text: 'Thoughts that you would be better off dead, or of hurting yourself in some way', icon: '🆘' },
+        // GAD-7 (Anxiety)
+        { id: 'q10', section: 'GAD-7', category: 'Anxiety', text: 'Feeling nervous, anxious, or on edge', icon: '😰' },
+        { id: 'q11', section: 'GAD-7', category: 'Anxiety', text: 'Not being able to stop or control worrying', icon: '🌀' },
+        { id: 'q12', section: 'GAD-7', category: 'Anxiety', text: 'Worrying too much about different things', icon: '🤯' },
+        { id: 'q13', section: 'GAD-7', category: 'Relaxation', text: 'Trouble relaxing', icon: '🧘' },
+        { id: 'q14', section: 'GAD-7', category: 'Restlessness', text: 'Being so restless that it is hard to sit still', icon: '😤' },
+        { id: 'q15', section: 'GAD-7', category: 'Irritability', text: 'Becoming easily annoyed or irritable', icon: '😠' },
+        { id: 'q16', section: 'GAD-7', category: 'Fear', text: 'Feeling afraid as if something awful might happen', icon: '😨' },
+    ];
+    const options = [
+        { label: 'Not at all', value: 0 },
+        { label: 'Several days', value: 1 },
+        { label: 'More than half the days', value: 2 },
+        { label: 'Nearly every day', value: 3 },
+    ];
+
     const modalHTML = `
         <div id="assessmentModal" class="modal active">
-            <div class="modal-content" style="max-width: 700px;">
+            <div class="modal-content" style="max-width:620px;">
                 <div class="modal-header">
-                    <h2><i class="fas fa-clipboard-check"></i> Mental Health Self-Assessment</h2>
-                    <span class="close" onclick="closeModal('assessmentModal')">&times;</span>
+                    <h2><i class="fas fa-clipboard-check"></i> Mental Health Self-Check</h2>
+                    <span class="close" onclick="document.getElementById('assessmentModal')?.remove(); document.body.style.overflow='';">&times;</span>
                 </div>
-                <div class="assessment-content">
-                    <p class="assessment-intro">This brief assessment will help us understand your current mental health status. Your responses are confidential.</p>
-                    <form id="assessmentForm" class="assessment-form">
-                        <div class="question-group">
-                            <h3>1. How often have you felt down, depressed, or hopeless in the past 2 weeks?</h3>
-                            <div class="radio-group">
-                                <label class="radio-label">
-                                    <input type="radio" name="depression" value="0">
-                                    <span class="radio-custom"></span>
-                                    Not at all
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="depression" value="1">
-                                    <span class="radio-custom"></span>
-                                    Several days
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="depression" value="2">
-                                    <span class="radio-custom"></span>
-                                    More than half the days
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="depression" value="3">
-                                    <span class="radio-custom"></span>
-                                    Nearly every day
-                                </label>
-                            </div>
-                        </div>
-                        
-                        <div class="question-group">
-                            <h3>2. How often have you felt nervous, anxious, or on edge?</h3>
-                            <div class="radio-group">
-                                <label class="radio-label">
-                                    <input type="radio" name="anxiety" value="0">
-                                    <span class="radio-custom"></span>
-                                    Not at all
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="anxiety" value="1">
-                                    <span class="radio-custom"></span>
-                                    Several days
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="anxiety" value="2">
-                                    <span class="radio-custom"></span>
-                                    More than half the days
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="anxiety" value="3">
-                                    <span class="radio-custom"></span>
-                                    Nearly every day
-                                </label>
-                            </div>
-                        </div>
-                        
-                        <div class="question-group">
-                            <h3>3. How would you rate your current stress level?</h3>
-                            <div class="stress-slider">
-                                <input type="range" id="stressLevel" name="stressLevel" min="1" max="10" value="5">
-                                <div class="slider-labels">
-                                    <span>Low (1)</span>
-                                    <span id="stressValue">5</span>
-                                    <span>High (10)</span>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="question-group">
-                            <h3>4. How well are you sleeping?</h3>
-                            <div class="radio-group">
-                                <label class="radio-label">
-                                    <input type="radio" name="sleep" value="good">
-                                    <span class="radio-custom"></span>
-                                    Sleeping well
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="sleep" value="fair">
-                                    <span class="radio-custom"></span>
-                                    Some difficulty
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="sleep" value="poor">
-                                    <span class="radio-custom"></span>
-                                    Poor sleep
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="sleep" value="insomnia">
-                                    <span class="radio-custom"></span>
-                                    Severe insomnia
-                                </label>
-                            </div>
-                        </div>
-                        
-                        <button type="submit" class="btn btn-primary btn-full">
-                            <i class="fas fa-chart-line"></i> Get My Results
+                <div class="assessment-content" style="padding:28px 32px;">
+                    <p style="color:#64748b;font-size:14px;margin-bottom:20px;line-height:1.6;">
+                        Based on the standard <strong>PHQ-9</strong> and <strong>GAD-7</strong> clinical tools.
+                        Over the <strong>last 2 weeks</strong>, how often have you been bothered by the following?
+                    </p>
+
+                    <div id="qa-progress-bar" style="background:#f1f5f9;border-radius:99px;height:6px;margin-bottom:24px;">
+                        <div id="qa-progress-fill" style="height:6px;border-radius:99px;background:linear-gradient(90deg,#6366f1,#8b5cf6);width:0%;transition:width 0.4s ease;"></div>
+                    </div>
+                    <p id="qa-progress-label" style="text-align:right;font-size:12px;color:#94a3b8;margin-top:-18px;margin-bottom:20px;">Question 1 of 16</p>
+
+                    <div id="qa-question-area"></div>
+
+                    <div style="display:flex;gap:12px;margin-top:28px;">
+                        <button id="qa-back-btn" class="btn btn-outline" style="display:none;flex:1;" onclick="qaNavigate(-1)">
+                            <i class="fas fa-arrow-left"></i> Back
                         </button>
-                    </form>
+                        <button id="qa-next-btn" class="btn btn-primary" style="flex:2;opacity:0.4;cursor:not-allowed;" disabled onclick="qaNavigate(1)">
+                            Next <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
     `;
-    
+
     document.body.insertAdjacentHTML('beforeend', modalHTML);
     document.body.style.overflow = 'hidden';
-    
-    // Handle stress slider
-    const stressSlider = document.getElementById('stressLevel');
-    const stressValue = document.getElementById('stressValue');
-    stressSlider.addEventListener('input', () => {
-        stressValue.textContent = stressSlider.value;
-    });
-    
-    // Handle form submission
-    document.getElementById('assessmentForm').addEventListener('submit', handleAssessmentSubmission);
+
+    let current = 0;
+    const answers = {};
+
+    function renderQuestion(idx) {
+        const q = questions[idx];
+        const area = document.getElementById('qa-question-area');
+        const fill = document.getElementById('qa-progress-fill');
+        const label = document.getElementById('qa-progress-label');
+        const nextBtn = document.getElementById('qa-next-btn');
+        const backBtn = document.getElementById('qa-back-btn');
+
+        fill.style.width = `${((idx) / questions.length) * 100}%`;
+        label.textContent = `Question ${idx + 1} of ${questions.length}`;
+        backBtn.style.display = idx === 0 ? 'none' : 'flex';
+
+        const isLast = idx === questions.length - 1;
+        nextBtn.innerHTML = isLast
+            ? '<i class="fas fa-chart-line"></i> Get My Results'
+            : 'Next <i class="fas fa-arrow-right"></i>';
+
+        const sectionColor = q.section === 'PHQ-9' ? '#6366f1' : '#0ea5e9';
+        const sectionBg    = q.section === 'PHQ-9' ? '#ede9fe' : '#e0f2fe';
+        area.innerHTML = `
+            <div style="text-align:center;margin-bottom:24px;">
+                <div style="font-size:48px;margin-bottom:10px;">${q.icon}</div>
+                <div style="display:flex;justify-content:center;gap:8px;margin-bottom:4px;">
+                    <span style="background:${sectionBg};color:${sectionColor};font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;letter-spacing:0.5px;">${q.section}</span>
+                    <span style="background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;text-transform:uppercase;letter-spacing:0.5px;">${q.category}</span>
+                </div>
+                <h3 style="margin:14px 0 0;font-size:17px;color:#1e293b;line-height:1.5;">${q.text}</h3>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px;">
+                ${options.map(opt => `
+                    <label style="display:flex;align-items:center;gap:14px;padding:14px 18px;border:2px solid ${answers[q.id] == opt.value ? '#6366f1' : '#e2e8f0'};border-radius:12px;cursor:pointer;background:${answers[q.id] == opt.value ? '#f5f3ff' : '#fff'};transition:all 0.2s;">
+                        <input type="radio" name="qa_current" value="${opt.value}" ${answers[q.id] == opt.value ? 'checked' : ''} style="accent-color:#6366f1;width:18px;height:18px;">
+                        <span style="font-size:15px;color:#374151;font-weight:${answers[q.id] == opt.value ? '600' : '400'};">${opt.label}</span>
+                    </label>
+                `).join('')}
+            </div>
+        `;
+
+        // Re-enable next if already answered
+        const alreadyAnswered = answers[q.id] !== undefined;
+        nextBtn.disabled = !alreadyAnswered;
+        nextBtn.style.opacity = alreadyAnswered ? '1' : '0.4';
+        nextBtn.style.cursor = alreadyAnswered ? 'pointer' : 'not-allowed';
+
+        area.querySelectorAll('input[name="qa_current"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                answers[q.id] = parseInt(radio.value);
+                nextBtn.disabled = false;
+                nextBtn.style.opacity = '1';
+                nextBtn.style.cursor = 'pointer';
+                // Re-render to highlight selected
+                renderQuestion(current);
+            });
+        });
+    }
+
+    window.qaNavigate = function(dir) {
+        if (dir === 1 && current === questions.length - 1) {
+            // Submit
+            const totalScore = Object.values(answers).reduce((a, b) => a + b, 0);
+            document.getElementById('assessmentModal')?.remove();
+            document.body.style.overflow = '';
+            handleAssessmentSubmission({ score: totalScore, answers, questions });
+            return;
+        }
+        current = Math.max(0, Math.min(questions.length - 1, current + dir));
+        renderQuestion(current);
+    };
+
+    renderQuestion(0);
 }
 
 function showServiceModal(serviceType) {
@@ -2136,90 +2173,129 @@ async function handleBookingSubmission(e) {
     }
 }
 
-async function handleAssessmentSubmission(e) {
-    e.preventDefault();
-    const formData = new FormData(e.target);
-    const data = Object.fromEntries(formData.entries());
-    
-    // Calculate assessment score
-    const depressionScore = parseInt(data.depression || 0);
-    const anxietyScore = parseInt(data.anxiety || 0);
-    const stressLevel = parseInt(data.stressLevel || 5);
-    const sleepScore = data.sleep === 'good' ? 0 : data.sleep === 'fair' ? 1 : data.sleep === 'poor' ? 2 : 3;
-    
-    const totalScore = depressionScore + anxietyScore + sleepScore + Math.floor(stressLevel / 3);
-    
-    let recommendation = '';
-    let riskLevel = '';
-    
-    if (totalScore <= 3) {
-        riskLevel = 'Low';
-        recommendation = 'Your assessment suggests you\'re managing well! Continue with self-care practices and consider our mindfulness programs.';
-    } else if (totalScore <= 6) {
-        riskLevel = 'Moderate';
-        recommendation = 'You may benefit from professional support. Consider scheduling a consultation to discuss strategies for improvement.';
+async function handleAssessmentSubmission({ score, answers, questions }) {
+    const phq9Score = questions.filter(q => q.section === 'PHQ-9').reduce((s, q) => s + (answers[q.id] ?? 0), 0);
+    const gad7Score = questions.filter(q => q.section === 'GAD-7').reduce((s, q) => s + (answers[q.id] ?? 0), 0);
+
+    // PHQ-9: 0-4 minimal, 5-9 mild, 10-14 moderate, 15-19 mod-severe, 20-27 severe
+    let depressionLevel, depressionColor;
+    if (phq9Score <= 4)       { depressionLevel = 'Minimal';             depressionColor = '#22c55e'; }
+    else if (phq9Score <= 9)  { depressionLevel = 'Mild';                depressionColor = '#84cc16'; }
+    else if (phq9Score <= 14) { depressionLevel = 'Moderate';            depressionColor = '#f59e0b'; }
+    else if (phq9Score <= 19) { depressionLevel = 'Moderately Severe';   depressionColor = '#f97316'; }
+    else                      { depressionLevel = 'Severe';              depressionColor = '#ef4444'; }
+
+    // GAD-7: 0-4 minimal, 5-9 mild, 10-14 moderate, 15-21 severe
+    let anxietyLevel, anxietyColor;
+    if (gad7Score <= 4)       { anxietyLevel = 'Minimal';   anxietyColor = '#22c55e'; }
+    else if (gad7Score <= 9)  { anxietyLevel = 'Mild';      anxietyColor = '#84cc16'; }
+    else if (gad7Score <= 14) { anxietyLevel = 'Moderate';  anxietyColor = '#f59e0b'; }
+    else                      { anxietyLevel = 'Severe';    anxietyColor = '#ef4444'; }
+
+    const overallScore = phq9Score + gad7Score;
+    const isHighRisk = phq9Score >= 15 || gad7Score >= 15 || answers['q9'] >= 1;
+
+    let emoji, recommendation;
+    if (overallScore <= 8) {
+        emoji = '🌟';
+        recommendation = 'You appear to be doing well overall. Keep maintaining healthy routines — regular exercise, sleep, and mindfulness are great for sustaining good mental health.';
+    } else if (overallScore <= 18) {
+        emoji = '🌤️';
+        recommendation = 'You may be experiencing mild symptoms. Self-care strategies like journaling, exercise, and mindfulness can help. Consider a free consultation if symptoms persist for more than 2 weeks.';
+    } else if (overallScore <= 30) {
+        emoji = '🌧️';
+        recommendation = 'Moderate symptoms detected across depression and/or anxiety. Speaking with a mental health professional would be beneficial. Our therapists can help you develop effective coping strategies.';
     } else {
-        riskLevel = 'High';
-        recommendation = 'We recommend scheduling an appointment with one of our therapists as soon as possible for professional support.';
+        emoji = '⚠️';
+        recommendation = 'Your responses suggest significant distress. We strongly recommend scheduling an appointment with one of our therapists. You deserve support and care.';
     }
-    
-    showAssessmentResults({
-        score: totalScore,
-        riskLevel,
-        recommendation,
-        responses: data
-    });
-    
-    // Store assessment data
+
+    // Q9 safety flag
+    const safetyFlag = answers['q9'] >= 1;
+
+    showAssessmentResults({ phq9Score, gad7Score, overallScore, depressionLevel, depressionColor, anxietyLevel, anxietyColor, emoji, recommendation, safetyFlag, answers, questions });
+
     localStorage.setItem('lastAssessment', JSON.stringify({
-        ...data,
-        score: totalScore,
-        riskLevel,
+        phq9Score, gad7Score, overallScore, depressionLevel, anxietyLevel, answers,
         timestamp: new Date().toISOString()
     }));
 }
 
-function showAssessmentResults(results) {
-    closeModal('assessmentModal');
-    
+function showAssessmentResults({ phq9Score, gad7Score, depressionLevel, depressionColor, anxietyLevel, anxietyColor, emoji, recommendation, safetyFlag, answers, questions }) {
+    const optionLabels = ['Not at all', 'Several days', 'More than half the days', 'Nearly every day'];
+
+    const makeBreakdown = (section, borderColor) => questions
+        .filter(q => q.section === section)
+        .map(q => `
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:8px 0;border-bottom:1px solid #f1f5f9;">
+                <span style="font-size:13px;color:#475569;flex:1;line-height:1.4;">${q.icon} ${q.text}</span>
+                <span style="font-size:12px;font-weight:600;color:${borderColor};margin-left:12px;white-space:nowrap;">${optionLabels[answers[q.id] ?? 0]}</span>
+            </div>
+        `).join('');
+
     const modalHTML = `
         <div id="resultsModal" class="modal active">
-            <div class="modal-content" style="max-width: 600px;">
-                <div class="modal-header">
+            <div class="modal-content" style="max-width:620px;max-height:90vh;overflow-y:auto;">
+                <div class="modal-header" style="position:sticky;top:0;z-index:10;background:#fff;">
                     <h2><i class="fas fa-chart-line"></i> Your Assessment Results</h2>
-                    <span class="close" onclick="closeModal('resultsModal')">&times;</span>
+                    <span class="close" onclick="document.getElementById('resultsModal')?.remove(); document.body.style.overflow='';">&times;</span>
                 </div>
-                <div class="results-content">
-                    <div class="score-display">
-                        <div class="score-circle ${results.riskLevel.toLowerCase()}">
-                            <span class="score-number">${results.score}</span>
-                            <span class="score-label">out of 12</span>
+                <div style="padding:24px 32px;">
+
+                    ${safetyFlag ? `
+                    <div style="background:#fef2f2;border:2px solid #ef4444;border-radius:12px;padding:14px 18px;margin-bottom:20px;display:flex;gap:12px;align-items:flex-start;">
+                        <span style="font-size:20px;">🆘</span>
+                        <div>
+                            <p style="margin:0;font-size:14px;font-weight:700;color:#dc2626;">If you are having thoughts of hurting yourself, please reach out immediately.</p>
+                            <p style="margin:4px 0 0;font-size:13px;color:#dc2626;">Call or text <strong>988</strong> (Suicide & Crisis Lifeline) — available 24/7.</p>
                         </div>
-                        <div class="risk-level">
-                            <h3>Risk Level: <span class="${results.riskLevel.toLowerCase()}">${results.riskLevel}</span></h3>
+                    </div>` : ''}
+
+                    <div style="font-size:48px;text-align:center;margin-bottom:16px;">${emoji}</div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;">
+                        <div style="background:#f8fafc;border:2px solid ${depressionColor};border-radius:14px;padding:16px;text-align:center;">
+                            <p style="margin:0 0 4px;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">PHQ-9 · Depression</p>
+                            <div style="font-size:36px;font-weight:800;color:${depressionColor};">${phq9Score}<span style="font-size:14px;color:#94a3b8;">/27</span></div>
+                            <div style="font-size:13px;font-weight:600;color:${depressionColor};margin-top:2px;">${depressionLevel}</div>
+                        </div>
+                        <div style="background:#f8fafc;border:2px solid ${anxietyColor};border-radius:14px;padding:16px;text-align:center;">
+                            <p style="margin:0 0 4px;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">GAD-7 · Anxiety</p>
+                            <div style="font-size:36px;font-weight:800;color:${anxietyColor};">${gad7Score}<span style="font-size:14px;color:#94a3b8;">/21</span></div>
+                            <div style="font-size:13px;font-weight:600;color:${anxietyColor};margin-top:2px;">${anxietyLevel}</div>
                         </div>
                     </div>
-                    
-                    <div class="recommendation">
-                        <h3>Recommendation</h3>
-                        <p>${results.recommendation}</p>
+
+                    <div style="background:#f8fafc;border-radius:12px;padding:16px 20px;margin-bottom:20px;">
+                        <h4 style="margin:0 0 8px;font-size:13px;font-weight:700;color:#374151;">Recommendation</h4>
+                        <p style="font-size:14px;color:#475569;line-height:1.6;margin:0;">${recommendation}</p>
                     </div>
-                    
-                    <div class="next-steps">
-                        <h3>Next Steps</h3>
-                        <div class="action-buttons">
-                            ${results.riskLevel === 'High' ? 
-                                '<button class="btn btn-primary" onclick="closeModal(\'resultsModal\'); bookSession();">Schedule Appointment</button>' :
-                                '<button class="btn btn-primary" onclick="closeModal(\'resultsModal\'); showConsultationModal();">Free Consultation</button>'
-                            }
-                            <button class="btn btn-outline" onclick="closeModal('resultsModal'); downloadTools();">Get Self-Help Tools</button>
-                        </div>
+
+                    <details style="margin-bottom:20px;">
+                        <summary style="font-size:13px;font-weight:600;color:#6366f1;cursor:pointer;margin-bottom:8px;">PHQ-9 Answers (Depression)</summary>
+                        <div style="margin-top:8px;">${makeBreakdown('PHQ-9', '#6366f1')}</div>
+                    </details>
+                    <details style="margin-bottom:20px;">
+                        <summary style="font-size:13px;font-weight:600;color:#0ea5e9;cursor:pointer;margin-bottom:8px;">GAD-7 Answers (Anxiety)</summary>
+                        <div style="margin-top:8px;">${makeBreakdown('GAD-7', '#0ea5e9')}</div>
+                    </details>
+
+                    <div style="display:flex;gap:12px;margin-bottom:12px;">
+                        <button class="btn btn-primary" style="flex:1;" onclick="handleAssessmentCTA()">
+                            <i class="fas fa-user"></i> Login / Sign Up
+                        </button>
+                        <button class="btn btn-outline" style="flex:1;" onclick="document.getElementById('resultsModal')?.remove(); document.body.style.overflow='';">
+                            Okay
+                        </button>
                     </div>
+                    <p style="text-align:center;font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.5;">
+                        This is a validated screening tool, not a clinical diagnosis.<br>Please consult a qualified mental health professional for a proper assessment.
+                    </p>
                 </div>
             </div>
         </div>
     `;
-    
+
     document.body.insertAdjacentHTML('beforeend', modalHTML);
 }
 
@@ -3169,19 +3245,21 @@ document.addEventListener('DOMContentLoaded', () => {
 // Global logout function
 async function logout() {
     try {
-        const response = await fetch('http://localhost:8000/users/auth/logout/', {
+        const token = localStorage.getItem('authToken');
+        const response = await fetch(`${API_BASE_URL}/users/auth/logout/`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                ...(token ? { 'Authorization': `Token ${token}` } : {})
             },
         });
 
         const result = await response.json();
 
         if (result.success) {
-            // Clear local storage
             localStorage.removeItem('user');
             localStorage.removeItem('isAuthenticated');
+            localStorage.removeItem('authToken');
             
             createNotification('Logged out successfully!', 'success');
             
@@ -3196,9 +3274,9 @@ async function logout() {
 
     } catch (error) {
         console.error('Logout error:', error);
-        // Even if the request fails, clear local data
         localStorage.removeItem('user');
         localStorage.removeItem('isAuthenticated');
+        localStorage.removeItem('authToken');
         createNotification('Logged out locally.', 'info');
         
         setTimeout(() => {
@@ -3214,14 +3292,14 @@ window.showDashboard = () => {
     const userData = localStorage.getItem('user');
 
     if (!isAuthenticated || !userData) {
-        if (window.healHopeApp && typeof window.healHopeApp.autoAuthenticate === 'function') {
-            window.healHopeApp.autoAuthenticate();
+        if (window.mindWellApp && typeof window.mindWellApp.autoAuthenticate === 'function') {
+            window.mindWellApp.autoAuthenticate();
         }
     }
     window.location.href = 'dashboard.html';
 };
 window.toggleUserMode = function() {
-    const app = window.healHopeApp;
+    const app = window.mindWellApp;
     if (app && app.handleModeToggle) {
         const toggle = document.getElementById('userModeToggle');
         app.handleModeToggle({ target: toggle });
@@ -3231,7 +3309,7 @@ window.toggleUserMode = function() {
 // Export for potential module use
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        HealHopeApp,
+        MindWellApp,
         showBookingModal,
         showSelfAssessmentModal,
         showServiceModal,

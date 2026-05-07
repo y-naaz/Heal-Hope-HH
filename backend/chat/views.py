@@ -10,7 +10,7 @@ from .serializers import (
     ChatRoomSerializer, MessageSerializer, CrisisAlertSerializer,
     ChatParticipantSerializer
 )
-from .ai_support import get_ai_response, detect_crisis_keywords, get_emergency_resources, get_support_resources
+from .ai_support import get_ai_response, detect_crisis_keywords, get_emergency_resources, get_support_resources, get_enhanced_ai_response, generate_gemini_response
 
 User = get_user_model()
 
@@ -438,6 +438,47 @@ class AIAssistantViewSet(viewsets.ViewSet):
         return context
 
 
+# ── Simple HTTP AI chat endpoint (used when WebSocket is unavailable) ────────
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def ai_chat(request):
+    """
+    POST /chat/ai-chat/
+    Body: { "message": "...", "history": [{role, content}, ...] }
+    """
+    message = request.data.get('message', '').strip()
+    history = request.data.get('history', [])  # [{role:'user'|'assistant', content:'...'}]
+    if not message:
+        return Response({'error': 'message is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    crisis_keywords = detect_crisis_keywords(message)
+    is_crisis = bool(crisis_keywords)
+
+    try:
+        ai_text = generate_gemini_response(
+            message=message,
+            crisis_detected=is_crisis,
+            user_context={},
+            conversation_history=history
+        )
+    except Exception:
+        ai_text = None
+
+    if not ai_text:
+        ai_text = get_ai_response(message, is_crisis=is_crisis, user_context={})
+
+    if not ai_text:
+        ai_text = "I'm here with you. Could you share more about what's on your mind?"
+
+    return Response({
+        'success': True,
+        'response': ai_text,
+        'is_crisis': is_crisis,
+        'response_type': 'crisis_intervention' if is_crisis else 'supportive',
+    })
+
+
 # ── Memory API endpoints ────────────────────────────────────────────────────
 
 @api_view(['POST'])
@@ -503,3 +544,154 @@ def memory_profile(request):
     except Exception:
         pass
     return Response({'success': True, 'profile': profile})
+
+
+# ── Community Feed REST endpoints ────────────────────────────────────────────
+
+def _serialize_post(post, requesting_user):
+    author_name = 'Anonymous' if post.is_anonymous else (
+        post.author.first_name or post.author.username or post.author.email.split('@')[0]
+    )
+    return {
+        'id': post.pk,
+        'content': post.content,
+        'category': post.get_category_display(),
+        'category_key': post.category,
+        'author': author_name,
+        'author_id': None if post.is_anonymous else post.author.id,
+        'is_anonymous': post.is_anonymous,
+        'like_count': post.likes.count(),
+        'is_liked': post.likes.filter(pk=requesting_user.pk).exists(),
+        'created_at': post.created_at.isoformat(),
+    }
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def community_posts(request):
+    """
+    GET  /chat/community/posts/ — list recent posts
+    POST /chat/community/posts/ — create a new post
+    """
+    from .models import CommunityPost
+
+    if request.method == 'GET':
+        posts = CommunityPost.objects.select_related('author').prefetch_related('likes').order_by('-created_at')[:50]
+        return Response({
+            'success': True,
+            'posts': [_serialize_post(p, request.user) for p in posts],
+        })
+
+    # POST — create
+    content = request.data.get('content', '').strip()
+    category = request.data.get('category', 'general')
+    is_anonymous = bool(request.data.get('is_anonymous', False))
+
+    if not content:
+        return Response({'success': False, 'error': 'Content is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if len(content) > 1000:
+        return Response({'success': False, 'error': 'Content too long (max 1000 chars)'}, status=status.HTTP_400_BAD_REQUEST)
+
+    valid_categories = [c[0] for c in CommunityPost.CATEGORY_CHOICES]
+    if category not in valid_categories:
+        category = 'general'
+
+    post = CommunityPost.objects.create(
+        author=request.user,
+        content=content,
+        category=category,
+        is_anonymous=is_anonymous,
+    )
+    return Response({'success': True, 'post': _serialize_post(post, request.user)}, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def community_post_like(request, post_id):
+    """Toggle like on a community post."""
+    from .models import CommunityPost
+    try:
+        post = CommunityPost.objects.get(pk=post_id)
+    except CommunityPost.DoesNotExist:
+        return Response({'success': False, 'error': 'Post not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if post.likes.filter(pk=request.user.pk).exists():
+        post.likes.remove(request.user)
+        liked = False
+    else:
+        post.likes.add(request.user)
+        liked = True
+
+    return Response({
+        'success': True,
+        'liked': liked,
+        'like_count': post.likes.count(),
+    })
+
+
+# ── Support Groups REST endpoints ─────────────────────────────────────────────
+
+_DEFAULT_GROUPS = [
+    {'name': 'Anxiety Support Circle', 'description': 'A safe space to share experiences and coping strategies for anxiety', 'group_type': 'open', 'format_type': 'online', 'schedule_day': 'Tuesdays', 'schedule_time': '7 PM'},
+    {'name': 'Depression Recovery Hub', 'description': 'Supportive community for those working through depression', 'group_type': 'moderated', 'format_type': 'hybrid', 'schedule_day': 'Thursdays', 'schedule_time': '6 PM'},
+    {'name': 'Young Adults Circle', 'description': 'Mental health support for ages 18-25', 'group_type': 'age_specific', 'format_type': 'online', 'schedule_day': 'Saturdays', 'schedule_time': '2 PM'},
+]
+
+
+def _ensure_default_groups():
+    from .models import SupportGroup
+    if not SupportGroup.objects.exists():
+        for d in _DEFAULT_GROUPS:
+            SupportGroup.objects.get_or_create(name=d['name'], defaults=d)
+
+
+def _serialize_group(group, requesting_user):
+    is_member = group.members.filter(pk=requesting_user.pk).exists()
+    format_icons = {'online': 'fas fa-video', 'hybrid': 'fas fa-map-marker-alt', 'in_person': 'fas fa-map-marker-alt'}
+    return {
+        'id': group.pk,
+        'name': group.name,
+        'description': group.description,
+        'group_type': group.group_type,
+        'group_type_label': group.group_type_label,
+        'format_type': group.format_type,
+        'format_icon': format_icons.get(group.format_type, 'fas fa-video'),
+        'schedule_day': group.schedule_day,
+        'schedule_time': group.schedule_time,
+        'member_count': group.members.count(),
+        'is_member': is_member,
+    }
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def support_groups_list(request):
+    """GET /chat/community/groups/ — list all active support groups."""
+    from .models import SupportGroup
+    _ensure_default_groups()
+    groups = SupportGroup.objects.filter(is_active=True).prefetch_related('members')
+    return Response({'success': True, 'groups': [_serialize_group(g, request.user) for g in groups]})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def support_group_join(request, group_id):
+    """Toggle join/leave for a support group."""
+    from .models import SupportGroup
+    try:
+        group = SupportGroup.objects.get(pk=group_id, is_active=True)
+    except SupportGroup.DoesNotExist:
+        return Response({'success': False, 'error': 'Group not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if group.members.filter(pk=request.user.pk).exists():
+        group.members.remove(request.user)
+        joined = False
+    else:
+        group.members.add(request.user)
+        joined = True
+
+    return Response({
+        'success': True,
+        'joined': joined,
+        'member_count': group.members.count(),
+    })

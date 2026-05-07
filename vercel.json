@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "name": "healhope",
+  "name": "mindwell",
   "builds": [
     {
       "src": "mental-health-website/**",

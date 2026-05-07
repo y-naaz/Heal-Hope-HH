@@ -1,3 +1,6 @@
+import os
+import time
+import requests as http_requests
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated
@@ -8,15 +11,19 @@ from datetime import datetime, timedelta, date
 from collections import Counter
 import json
 
+# Simple in-process cache for Reddit feed (avoids Redis dependency for this feature)
+_reddit_cache = {}  # {key: (timestamp, data)}
+
 from .models import (
-    MoodEntry, JournalEntry, Goal, Activity, Appointment, 
-    UserSettings, MeditationSession, DashboardInsight
+    MoodEntry, JournalEntry, Goal, Activity, Appointment,
+    UserSettings, MeditationSession, DashboardInsight, SafetyPlan
 )
 from .serializers import (
-    MoodEntrySerializer, JournalEntrySerializer, GoalSerializer, 
+    MoodEntrySerializer, JournalEntrySerializer, GoalSerializer,
     ActivitySerializer, AppointmentSerializer, UserSettingsSerializer,
     MeditationSessionSerializer, DashboardInsightSerializer,
-    MoodAnalyticsSerializer, DashboardStatsSerializer, RecentActivitySerializer
+    MoodAnalyticsSerializer, DashboardStatsSerializer, RecentActivitySerializer,
+    SafetyPlanSerializer
 )
 from chat.memory_service import MemoryService
 
@@ -29,30 +36,42 @@ class MoodEntryViewSet(viewsets.ModelViewSet):
         
         return MoodEntry.objects.filter(user=user)
 
-    def create(self, request, *args, **kwargs):
-        # Create mood entry
-        response = super().create(request, *args, **kwargs)
-        
-        if response.status_code == status.HTTP_201_CREATED:
-            # Add to memory system for personalization
-            mood_data = response.data
-            memory_content = f"User logged mood: {mood_data['mood']} (score: {mood_data['score']}) on {mood_data['date']}"
-            if mood_data.get('note'):
-                memory_content += f". Note: {mood_data['note']}"
-            if mood_data.get('factors'):
-                memory_content += f". Factors: {', '.join(mood_data['factors'])}"
-            
-            try:
-                memory_service = MemoryService()
-                memory_service.add_memory(
-                    user_id=str(request.user.id),
-                    content=memory_content,
-                    category="mood_tracking"
-                )
-            except Exception as e:
-                print(f"Failed to add mood to memory: {e}")
-            
-            # Create activity record
+    def create(self, request):
+        date = request.data.get('date')
+        existing = MoodEntry.objects.filter(user=request.user, date=date).first()
+
+        if existing:
+            # Update the existing entry for this day instead of inserting a duplicate
+            serializer = self.get_serializer(existing, data=request.data, partial=False)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            mood_data = serializer.data
+            created = False
+        else:
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            serializer.save(user=request.user)
+            mood_data = serializer.data
+            created = True
+
+        # Add to memory system for personalization
+        memory_content = f"User logged mood: {mood_data['mood']} (score: {mood_data['score']}) on {mood_data['date']}"
+        if mood_data.get('note'):
+            memory_content += f". Note: {mood_data['note']}"
+        if mood_data.get('factors'):
+            memory_content += f". Factors: {', '.join(mood_data['factors'])}"
+
+        try:
+            memory_service = MemoryService()
+            memory_service.add_memory(
+                user_id=str(request.user.id),
+                content=memory_content,
+                category="mood_tracking"
+            )
+        except Exception as e:
+            print(f"Failed to add mood to memory: {e}")
+
+        if created:
             Activity.objects.create(
                 user=request.user,
                 activity_type='mood',
@@ -60,8 +79,9 @@ class MoodEntryViewSet(viewsets.ModelViewSet):
                 description=mood_data.get('note', ''),
                 metadata={'mood': mood_data['mood'], 'score': mood_data['score']}
             )
-        
-        return response
+
+        http_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        return Response({'success': True, **mood_data}, status=http_status)
 
     @action(detail=False, methods=['get'])
     def analytics(self, request):
@@ -83,23 +103,27 @@ class MoodEntryViewSet(viewsets.ModelViewSet):
         
         # Calculate analytics
         total_entries = mood_entries.count()
-        average_score = mood_entries.aggregate(Avg('score'))['score__avg'] or 0
-        
-        # Most common mood
-        mood_counts = Counter(mood_entries.values_list('mood', flat=True))
-        most_common_mood = mood_counts.most_common(1)[0][0] if mood_counts else None
-        
-        # Weekly improvement
+
+        # Weekly windows
         week_ago = timezone.now().date() - timedelta(days=7)
         this_week = mood_entries.filter(date__gte=week_ago)
         last_week = mood_entries.filter(
             date__gte=week_ago - timedelta(days=7),
             date__lt=week_ago
         )
-        
+
         this_week_avg = this_week.aggregate(Avg('score'))['score__avg'] or 0
         last_week_avg = last_week.aggregate(Avg('score'))['score__avg'] or 0
-        weekly_improvement = ((this_week_avg - last_week_avg) / last_week_avg * 100) if last_week_avg > 0 else 0
+
+        # "This Week's Average" — only current-week entries
+        average_score = this_week_avg
+
+        # Most common mood (this week only, fall back to all-time)
+        week_moods = list(this_week.values_list('mood', flat=True))
+        mood_counts = Counter(week_moods) if week_moods else Counter(mood_entries.values_list('mood', flat=True))
+        most_common_mood = mood_counts.most_common(1)[0][0] if mood_counts else None
+
+        weekly_improvement = round((this_week_avg - last_week_avg) / last_week_avg * 100, 1) if last_week_avg > 0 else None
         
         # Mood distribution
         mood_distribution = dict(mood_counts)
@@ -114,7 +138,7 @@ class MoodEntryViewSet(viewsets.ModelViewSet):
         analytics_data = {
             'average_score': round(average_score, 1),
             'most_common_mood': most_common_mood,
-            'weekly_improvement': round(weekly_improvement, 1),
+            'weekly_improvement': weekly_improvement,
             'total_entries': total_entries,
             'mood_distribution': mood_distribution,
             'recent_trend': recent_trend
@@ -384,11 +408,60 @@ class MeditationSessionViewSet(viewsets.ModelViewSet):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def mood_entry_analytics(request):
+    """Explicit analytics endpoint — mirrors MoodEntryViewSet.analytics."""
+    user = request.user
+    mood_entries = MoodEntry.objects.filter(user=user).order_by('-date')
+
+    if not mood_entries.exists():
+        return Response({
+            'success': True,
+            'analytics': {
+                'average_score': None,
+                'most_common_mood': None,
+                'weekly_improvement': None,
+                'total_entries': 0,
+            }
+        })
+
+    week_ago = timezone.now().date() - timedelta(days=7)
+    this_week = mood_entries.filter(date__gte=week_ago)
+    last_week = mood_entries.filter(date__gte=week_ago - timedelta(days=7), date__lt=week_ago)
+
+    this_week_avg = this_week.aggregate(Avg('score'))['score__avg']
+    last_week_avg = last_week.aggregate(Avg('score'))['score__avg']
+
+    week_moods = list(this_week.values_list('mood', flat=True))
+    mood_counts = Counter(week_moods) if week_moods else Counter(mood_entries.values_list('mood', flat=True))
+    most_common_mood = mood_counts.most_common(1)[0][0] if mood_counts else None
+
+    weekly_improvement = None
+    if this_week_avg is not None and last_week_avg:
+        weekly_improvement = round((this_week_avg - last_week_avg) / last_week_avg * 100, 1)
+
+    return Response({
+        'success': True,
+        'analytics': {
+            'average_score': round(this_week_avg, 1) if this_week_avg else None,
+            'most_common_mood': most_common_mood,
+            'weekly_improvement': weekly_improvement,
+            'total_entries': mood_entries.count(),
+        }
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def dashboard_overview(request):
     """Get comprehensive dashboard overview with all stats"""
     user = request.user
-    
-    today = timezone.now().date()
+
+    # Use client-supplied date to handle timezone differences (frontend sends YYYY-MM-DD)
+    client_date = request.query_params.get('today')
+    try:
+        today = datetime.strptime(client_date, '%Y-%m-%d').date() if client_date else timezone.now().date()
+    except ValueError:
+        today = timezone.now().date()
     
     # Today's mood
     today_mood_entry = MoodEntry.objects.filter(user=user, date=today).first()
@@ -397,9 +470,13 @@ def dashboard_overview(request):
     # Calculate mood change from yesterday
     yesterday = today - timedelta(days=1)
     yesterday_mood = MoodEntry.objects.filter(user=user, date=yesterday).first()
-    mood_change = 0
+    # None = no yesterday entry (can't compute), 0 = same score, else % change
+    mood_change = None
     if today_mood_entry and yesterday_mood:
-        mood_change = ((today_mood_entry.score - yesterday_mood.score) / yesterday_mood.score) * 100
+        if yesterday_mood.score != 0:
+            mood_change = round(((today_mood_entry.score - yesterday_mood.score) / yesterday_mood.score) * 100, 1)
+        else:
+            mood_change = 0
     
     # Meditation streak
     meditation_sessions = MeditationSession.objects.filter(user=user, completed=True).order_by('-created_at')
@@ -497,7 +574,7 @@ def dashboard_overview(request):
         'dashboard_stats': {
             'todays_mood': {
                 'mood': today_mood,
-                'change': round(mood_change, 1) if mood_change != 0 else None
+                'change': mood_change
             },
             'meditation_streak': meditation_streak,
             'meditation_streak_text': 'Personal best!' if meditation_streak > 0 else 'Start your journey!',
@@ -516,8 +593,8 @@ def dashboard_overview(request):
         },
         'recent_activities': activities_data,
         'mood_chart_data': {
-            'labels': [entry['day'] for entry in mood_chart_data if entry['score'] is not None],
-            'scores': [entry['score'] for entry in mood_chart_data if entry['score'] is not None]
+            'labels': [entry['day'] for entry in mood_chart_data],
+            'scores': [entry['score'] for entry in mood_chart_data],  # None for days with no entry
         },
         'insights': insights
     }
@@ -676,19 +753,26 @@ def mood_entries(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def create_mood_entry(request):
-    """Create a new mood entry"""
-    serializer = MoodEntrySerializer(data=request.data, context={'request': request})
-    
+    """Create or update today's mood entry (one entry per user per date)"""
+    date = request.data.get('date')
+    existing = MoodEntry.objects.filter(user=request.user, date=date).first()
+
+    if existing:
+        serializer = MoodEntrySerializer(existing, data=request.data, context={'request': request}, partial=False)
+    else:
+        serializer = MoodEntrySerializer(data=request.data, context={'request': request})
+
     if serializer.is_valid():
         mood_entry = serializer.save()
-        
+        created = not bool(existing)
+
         # Add to memory system
         memory_content = f"User logged mood: {mood_entry.mood} (score: {mood_entry.score}) on {mood_entry.date}"
         if mood_entry.note:
             memory_content += f". Note: {mood_entry.note}"
         if mood_entry.factors:
             memory_content += f". Factors: {', '.join(mood_entry.factors)}"
-        
+
         try:
             memory_service = MemoryService()
             memory_service.add_memory(
@@ -698,40 +782,88 @@ def create_mood_entry(request):
             )
         except Exception as e:
             print(f"Failed to add mood to memory: {e}")
-        
-        # Create activity record
-        Activity.objects.create(
-            user=request.user,
-            activity_type='mood',
-            title=f"Logged mood: {mood_entry.mood.replace('-', ' ').title()}",
-            description=mood_entry.note or '',
-            metadata={'mood': mood_entry.mood, 'score': mood_entry.score}
-        )
-        
+
+        if created:
+            Activity.objects.create(
+                user=request.user,
+                activity_type='mood',
+                title=f"Logged mood: {mood_entry.mood.replace('-', ' ').title()}",
+                description=mood_entry.note or '',
+                metadata={'mood': mood_entry.mood, 'score': mood_entry.score}
+            )
+
+        http_status = status.HTTP_201_CREATED if created else status.HTTP_200_OK
         return Response({
             'success': True,
             'mood_entry': serializer.data,
             'message': 'Mood logged successfully!'
-        }, status=status.HTTP_201_CREATED)
-    
+        }, status=http_status)
+
     return Response({
         'success': False,
         'errors': serializer.errors
     }, status=status.HTTP_400_BAD_REQUEST)
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def analyse_journal_sentiment(request):
+    """Use Claude AI to analyse journal entry sentiment."""
+    import json as _json
+    text = request.data.get('text', '').strip()
+    if not text:
+        return Response({'error': 'No text provided'}, status=400)
+
+    FALLBACK = {
+        'success': True,
+        'label': 'Partly Cloudy', 'icon': '⛅', 'score': 0,
+        'suggestion': "Take a moment to breathe and check in with yourself. Even writing a few words is a meaningful step.",
+        'actions': ['🌬️ Breathing Exercise', '📋 View Resources']
+    }
+
+    prompt = f"""You are a compassionate journaling companion. Analyse this journal entry and reply with ONLY valid JSON — no markdown, no explanation.
+
+Journal entry:
+\"\"\"{text[:1500]}\"\"\"
+
+Reply with exactly this JSON:
+{{
+  "label": "Bright" | "Partly Cloudy" | "Cloudy",
+  "icon": "☀️" | "⛅" | "🌧️",
+  "score": <integer -10 to 10>,
+  "suggestion": "<warm 2-3 sentence paragraph, no clinical words like negative/positive/sentiment/disorder>",
+  "actions": ["<emoji + short label>", "<emoji + short label>"]
+}}
+
+Rules:
+- Bright (3..10): hopeful, grateful, joyful, peaceful tone
+- Partly Cloudy (-2..2): mixed, reflective, neutral
+- Cloudy (-10..-3): heavy, sad, anxious, overwhelmed
+- actions examples: "🧘 Try Meditation", "🎯 Set a Goal", "💬 Talk to Someone", "🌬️ Breathing Exercise", "📋 View Resources" """
+
+    try:
+        import google.generativeai as genai
+        from django.conf import settings as s
+        key = getattr(s, 'GEMINI_API_KEY', '') or os.environ.get('GOOGLE_API_KEY', '')
+        if not key:
+            return Response(FALLBACK)
+        genai.configure(api_key=key)
+        model = genai.GenerativeModel('models/gemini-2.0-flash')
+        raw = model.generate_content(prompt).text.strip()
+        if raw.startswith('```'):
+            raw = raw.split('```')[1].lstrip('json').strip()
+        result = _json.loads(raw)
+        return Response({'success': True, **result})
+    except Exception:
+        return Response(FALLBACK)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def journal_entries(request):
-    """Get journal entries for the authenticated user"""
-    user = request.user
-    
-    entries = JournalEntry.objects.filter(user=user).order_by('-created_at')
+    """Get journal entries for the authenticated user."""
+    entries = JournalEntry.objects.filter(user=request.user).order_by('-created_at')
     serializer = JournalEntrySerializer(entries, many=True)
-    
-    return Response({
-        'success': True,
-        'entries': serializer.data
-    })
+    return Response({'success': True, 'entries': serializer.data})
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -906,3 +1038,154 @@ def refresh_dashboard_data(request):
             'error': str(e),
             'message': 'Failed to reset dashboard data'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ── Safety Plan ───────────────────────────────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def safety_plan_get(request):
+    plan, _ = SafetyPlan.objects.get_or_create(user=request.user)
+    return Response({'success': True, 'plan': SafetyPlanSerializer(plan).data})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def safety_plan_save(request):
+    plan, _ = SafetyPlan.objects.get_or_create(user=request.user)
+    data = request.data.copy()
+
+    # Mark as reviewed whenever explicitly saved
+    if data.get('mark_reviewed'):
+        data['last_reviewed_at'] = timezone.now().isoformat()
+
+    serializer = SafetyPlanSerializer(plan, data=data, partial=True)
+    if serializer.is_valid():
+        serializer.save()
+        return Response({'success': True, 'plan': serializer.data})
+    return Response({'success': False, 'errors': serializer.errors}, status=400)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def safety_plan_suggestions(request):
+    section = request.GET.get('section', 'general')
+
+    SECTION_PROMPTS = {
+        'warning_signs_personal': (
+            "Give 5 concise, specific personal warning signs that someone might notice "
+            "in themselves before a mental health crisis — thoughts, feelings, body sensations. "
+            "Format as a simple numbered list, no headings."
+        ),
+        'warning_signs_observable': (
+            "Give 5 concise observable behavioral warning signs that friends or family might "
+            "notice in someone heading toward a mental health crisis. "
+            "Numbered list, no headings."
+        ),
+        'coping_strategies': (
+            "Give 6 evidence-based coping strategies someone can do alone to manage distress. "
+            "Mix physical, mindfulness, and creative activities. "
+            "Numbered list, brief (one sentence each), no headings."
+        ),
+        'environment_safety': (
+            "Give 5 practical steps someone can take to make their home environment safer "
+            "during a mental health crisis. Numbered list, no headings."
+        ),
+        'reasons_for_living': (
+            "Give 6 prompts to help someone identify their own personal reasons for living — "
+            "questions or sentence starters they can complete. Numbered list, no headings."
+        ),
+    }
+
+    prompt = SECTION_PROMPTS.get(section, SECTION_PROMPTS['coping_strategies'])
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=os.environ.get('GOOGLE_API_KEY', ''))
+        model = genai.GenerativeModel('models/gemini-2.0-flash-lite')
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        # Parse numbered list into array
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+        suggestions = []
+        for line in lines:
+            # Strip leading number + dot/paren
+            import re
+            cleaned = re.sub(r'^\d+[\.\)]\s*', '', line).strip()
+            if cleaned:
+                suggestions.append(cleaned)
+        return Response({'success': True, 'suggestions': suggestions[:7]})
+    except Exception as e:
+        return Response({'success': False, 'error': str(e)}, status=500)
+
+
+# ── Reddit Community Feed Proxy ────────────────────────────────────────────────
+
+ALLOWED_SUBS = {
+    'mentalhealth', 'Anxiety', 'depression', 'IndianMentalHealth',
+    'mindfulness', 'selfimprovement', 'meditation', 'therapy'
+}
+
+_REDDIT_CACHE_TTL = 900  # 15 minutes
+
+
+def _reddit_cache_get(key):
+    entry = _reddit_cache.get(key)
+    if entry and (time.time() - entry[0]) < _REDDIT_CACHE_TTL:
+        return entry[1]
+    return None
+
+
+def _reddit_cache_set(key, data):
+    _reddit_cache[key] = (time.time(), data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def reddit_feed(request):
+    sub = request.GET.get('sub', 'mentalhealth')
+    if sub not in ALLOWED_SUBS:
+        sub = 'mentalhealth'
+
+    cache_key = f'reddit_{sub}'
+    cached = _reddit_cache_get(cache_key)
+    if cached:
+        return Response({'success': True, 'posts': cached, 'cached': True})
+
+    try:
+        url = f'https://www.reddit.com/r/{sub}/hot.json?limit=25&raw_json=1'
+        headers = {
+            'User-Agent': 'MindWell/1.0 mental-health-app (+https://heal-hope-hh.vercel.app)'
+        }
+        resp = http_requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        children = resp.json()['data']['children']
+
+        posts = []
+        for child in children:
+            p = child['data']
+            if p.get('over_18') or p.get('stickied'):
+                continue
+            text = (p.get('selftext') or '').strip()
+            if text == '[removed]' or text == '[deleted]':
+                text = ''
+            posts.append({
+                'id': p['id'],
+                'title': p['title'],
+                'text': text[:500],
+                'url': f"https://www.reddit.com{p['permalink']}",
+                'subreddit': p['subreddit'],
+                'upvotes': p['ups'],
+                'comments': p['num_comments'],
+                'created_utc': p['created_utc'],
+                'flair': p.get('link_flair_text') or '',
+                'author': p.get('author', 'unknown'),
+            })
+
+        _reddit_cache_set(cache_key, posts)
+        return Response({'success': True, 'posts': posts, 'cached': False})
+
+    except http_requests.exceptions.Timeout:
+        return Response({'success': False, 'error': 'Reddit took too long to respond.'}, status=504)
+    except Exception as e:
+        return Response({'success': False, 'error': str(e)}, status=502)

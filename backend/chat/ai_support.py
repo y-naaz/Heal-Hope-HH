@@ -10,7 +10,15 @@ from django.conf import settings
 from users.models import CustomUser
 from .models import Message, ChatRoom
 
-# Import Google Generative AI
+# Import Groq
+try:
+    from groq import Groq as GroqClient
+    GROQ_AVAILABLE = True
+except ImportError:
+    GROQ_AVAILABLE = False
+    GroqClient = None
+
+# Import Google Generative AI (kept as fallback)
 try:
     import google.generativeai as genai
     GEMINI_AVAILABLE = True
@@ -30,16 +38,40 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Initialize Gemini AI client
+# ── Groq client (primary AI) ─────────────────────────────────────────────────
+groq_client = None
+if GROQ_AVAILABLE:
+    _groq_key = getattr(settings, 'GROQ_API_KEY', '') or os.environ.get('GROQ_API_KEY', '')
+    if _groq_key:
+        try:
+            groq_client = GroqClient(api_key=_groq_key)
+            logger.info("Groq AI client initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Groq client: {e}")
+
+# ── Gemini client (kept but no longer primary) ────────────────────────────────
 gemini_model = None
-if GEMINI_AVAILABLE and hasattr(settings, 'GEMINI_API_KEY') and settings.GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-        logger.info("Gemini AI client initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize Gemini AI client: {e}")
-        gemini_model = None
+_gemini_unavailable_until: float = 0.0
+_GEMINI_QUOTA_BACKOFF = 3600
+
+if not groq_client and GEMINI_AVAILABLE:
+    _gkey = getattr(settings, 'GEMINI_API_KEY', '') or os.environ.get('GOOGLE_API_KEY', '')
+    if _gkey:
+        try:
+            genai.configure(api_key=_gkey)
+            gemini_model = genai.GenerativeModel(
+                model_name='models/gemini-2.0-flash',
+                generation_config={'temperature': 0.75, 'top_p': 0.9, 'max_output_tokens': 512},
+                safety_settings=[
+                    {'category': 'HARM_CATEGORY_HARASSMENT',        'threshold': 'BLOCK_ONLY_HIGH'},
+                    {'category': 'HARM_CATEGORY_HATE_SPEECH',       'threshold': 'BLOCK_ONLY_HIGH'},
+                    {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_ONLY_HIGH'},
+                    {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_ONLY_HIGH'},
+                ]
+            )
+            logger.info("Gemini AI client initialized as fallback")
+        except Exception as e:
+            logger.error(f"Failed to initialize Gemini client: {e}")
 
 # Initialize services
 if ENHANCED_AI_AVAILABLE:
@@ -179,16 +211,25 @@ COPING_STRATEGIES = {
 
 RESOURCES = {
     'crisis': [
-        {'name': 'National Suicide Prevention Lifeline', 'contact': '988', 'description': '24/7 crisis support'},
-        {'name': 'Crisis Text Line', 'contact': 'Text HOME to 741741', 'description': 'Text-based crisis support'},
-        {'name': 'SAMHSA National Helpline', 'contact': '1-800-662-4357', 'description': 'Mental health and substance abuse'},
-        {'name': 'Emergency Services', 'contact': '911', 'description': 'Immediate emergency assistance'}
+        # India
+        {'name': 'iCall (India)', 'contact': '9152987821', 'description': 'Free counselling — Mon–Sat 8am–10pm', 'country': 'IN'},
+        {'name': 'Vandrevala Foundation', 'contact': '1860-2662-345', 'description': '24/7 mental health helpline India', 'country': 'IN'},
+        {'name': 'AASRA', 'contact': '9820466627', 'description': '24/7 suicide prevention helpline India', 'country': 'IN'},
+        {'name': 'Snehi India', 'contact': '044-24640050', 'description': 'Emotional support helpline India', 'country': 'IN'},
+        {'name': 'Emergency Services India', 'contact': '112', 'description': 'All-in-one emergency number India', 'country': 'IN'},
+        # International
+        {'name': '988 Suicide & Crisis Lifeline (US)', 'contact': '988', 'description': '24/7 — call or text (USA)', 'country': 'US'},
+        {'name': 'Crisis Text Line (US)', 'contact': 'Text HOME to 741741', 'description': '24/7 text-based crisis support (USA)', 'country': 'US'},
+        {'name': 'Samaritans (UK)', 'contact': '116 123', 'description': '24/7 free support (UK/Ireland)', 'country': 'UK'},
+        {'name': 'Lifeline (Australia)', 'contact': '13 11 14', 'description': '24/7 crisis support (Australia)', 'country': 'AU'},
     ],
     'support': [
-        {'name': 'Psychology Today', 'contact': 'psychologytoday.com', 'description': 'Find therapists in your area'},
-        {'name': 'BetterHelp', 'contact': 'betterhelp.com', 'description': 'Online therapy platform'},
-        {'name': 'NAMI', 'contact': 'nami.org', 'description': 'National Alliance on Mental Illness'},
-        {'name': 'Mental Health America', 'contact': 'mhanational.org', 'description': 'Mental health resources and screening'}
+        {'name': 'iCall (India)', 'contact': 'icallhelpline.org', 'description': 'Free online counselling — India'},
+        {'name': 'The Live Love Laugh Foundation', 'contact': 'thelivelovelaughfoundation.org', 'description': 'Mental health awareness — India'},
+        {'name': 'Vandrevala Foundation', 'contact': 'vandrevalafoundation.com', 'description': 'Free therapy & counselling — India'},
+        {'name': 'NIMHANS', 'contact': '080-46110007', 'description': 'National mental health institute — Bangalore'},
+        {'name': 'NAMI (US)', 'contact': 'nami.org', 'description': 'Mental health education & support — USA'},
+        {'name': 'Mind (UK)', 'contact': 'mind.org.uk', 'description': 'Mental health support — UK'},
     ]
 }
 
@@ -278,79 +319,26 @@ def get_coping_strategy(mood_type: str = None) -> str:
     
     return random.choice(all_strategies)
 
-def get_ai_response(message: str, is_crisis: bool = False, user_context: Dict = None) -> str:
-    """Generate AI response based on message content and context."""
-    try:
-        # Analyze the message
-        sentiment_analysis = analyze_sentiment(message)
-        crisis_keywords = detect_crisis_keywords(message)
-        
-        # Determine response type
-        if is_crisis or sentiment_analysis['sentiment'] == 'crisis' or crisis_keywords:
-            # Crisis response
-            response = random.choice(CRISIS_RESPONSES)
-            
-            # Add specific resources if keywords detected
-            if crisis_keywords:
-                response += f"\n\n*I noticed you mentioned: {', '.join(crisis_keywords[:3])}. These feelings are serious, and I want to make sure you get the help you deserve.*"
-            
-            return response
-        
-        elif sentiment_analysis['sentiment'] in ['negative', 'slightly_negative']:
-            # Supportive response for negative sentiment
-            response = random.choice(SUPPORTIVE_RESPONSES)
-            
-            # Add specific coping strategies based on detected issues
-            if 'anxious' in message.lower() or 'anxiety' in message.lower():
-                strategy = get_coping_strategy('anxiety')
-                response += f"\n\n**For anxiety specifically:** {strategy}"
-            elif 'depressed' in message.lower() or 'depression' in message.lower():
-                strategy = get_coping_strategy('depression')
-                response += f"\n\n**For depression specifically:** {strategy}"
-            elif 'stressed' in message.lower() or 'stress' in message.lower():
-                strategy = get_coping_strategy('stress')
-                response += f"\n\n**For stress specifically:** {strategy}"
-            elif 'angry' in message.lower() or 'anger' in message.lower():
-                strategy = get_coping_strategy('anger')
-                response += f"\n\n**For anger specifically:** {strategy}"
-            
-            return response
-        
-        elif sentiment_analysis['sentiment'] == 'positive':
-            # Positive reinforcement
-            responses = [
-                "I'm so glad to hear you're feeling better! It's wonderful when we can recognize and appreciate the good moments. 😊",
-                "That's fantastic! Celebrating positive moments is really important for our mental health. What's contributing to these good feelings?",
-                "I love hearing positive updates! These moments remind us that feelings do change and that there's hope even in difficult times."
-            ]
-            return random.choice(responses)
-        
-        else:
-            # Neutral/general response
-            responses = [
-                "Thank you for sharing that with me. How are you feeling overall today?",
-                "I'm here to listen. Is there anything specific you'd like to talk about or any way I can support you?",
-                "It sounds like you have a lot on your mind. Would you like to explore any of these feelings together?"
-            ]
-            
-            response = random.choice(responses)
-            
-            # Add context-based suggestions if available
-            if user_context:
-                if user_context.get('crisis_level') in ['medium', 'high']:
-                    response += "\n\nI see from your profile that you've been going through a challenging time. Remember that support is always available."
-                
-                recent_moods = user_context.get('recent_moods', [])
-                if recent_moods:
-                    avg_mood = sum(mood['level'] for mood in recent_moods) / len(recent_moods)
-                    if avg_mood < 3:
-                        response += "\n\nI noticed your mood has been lower recently. Would you like to talk about what's been affecting you?"
-            
-            return response
-    
-    except Exception as e:
-        logger.error(f"Error generating AI response: {str(e)}")
-        return "I'm here to listen and support you. How can I help you today?"
+def get_ai_response(message: str, is_crisis: bool = False, user_context: Dict = None,
+                   conversation_history: List[Dict] = None) -> str:
+    """Public entry point — delegates to generate_gemini_response (Groq/Gemini/static)."""
+    return generate_gemini_response(
+        message=message,
+        crisis_detected=is_crisis or bool(detect_crisis_keywords(message)),
+        user_context=user_context or {},
+        conversation_history=conversation_history or [],
+    )
+
+
+def _get_ai_response_static(message: str, is_crisis: bool = False, user_context: Dict = None) -> str:
+    """Pure static fallback — no API calls. Used internally only."""
+    # Last-resort minimal responses
+    if is_crisis or detect_crisis_keywords(message):
+        return ("What you're feeling right now sounds really heavy, and reaching out took courage. "
+                "Please know you're not alone — if you're in crisis, call **iCall: 9152987821** or **Vandrevala: 1860-2662-345** (24/7, free). "
+                "Are you somewhere safe right now?")
+
+    return "I'm here with you. Tell me more about what's going on."
 
 def get_emergency_resources() -> List[Dict]:
     """Get emergency crisis resources."""
@@ -438,188 +426,356 @@ def get_breathing_exercise() -> Dict[str, Any]:
     
     return random.choice(exercises)
 
-def generate_gemini_response(message: str, user_context: Dict = None, 
+def generate_gemini_response(message: str, user_context: Dict = None,
                            relevant_knowledge: List[Dict] = None,
-                           crisis_detected: bool = False) -> str:
-    """Generate AI response using Google Gemini"""
-    global gemini_model
-    
+                           crisis_detected: bool = False,
+                           conversation_history: List[Dict] = None) -> str:
+    """Generate AI response — uses Groq (primary) or Gemini (fallback)."""
+    import time
+    global gemini_model, _gemini_unavailable_until
+
+    # ── Try Groq first ────────────────────────────────────────────────────────
+    if groq_client:
+        try:
+            return _generate_groq_response(
+                message=message,
+                crisis_detected=crisis_detected,
+                user_context=user_context or {},
+                relevant_knowledge=relevant_knowledge or [],
+                conversation_history=conversation_history or [],
+            )
+        except Exception as e:
+            logger.error(f"Groq response failed, falling back: {e}")
+
+    # ── Gemini fallback (circuit-breaker guarded) ─────────────────────────────
+    if time.time() < _gemini_unavailable_until:
+        return _static_fallback(message, crisis_detected, user_context)
+
     if not gemini_model or not GEMINI_AVAILABLE:
-        # Fallback to template response
-        return get_ai_response(message, crisis_detected, user_context)
+        return _static_fallback(message, crisis_detected, user_context)
     
     try:
-        # Handle crisis situations with priority
+        # ── Crisis path — safety first ────────────────────────────────────────
         if crisis_detected:
             crisis_keywords = detect_crisis_keywords(message)
-            prompt = f"""You are a compassionate mental health support AI. The user has expressed concerning content that suggests they may be in crisis.
+            prompt = f"""You are MindWell, a compassionate mental health support companion. \
+A user has sent a message that contains crisis indicators.
 
-CRITICAL: This user has mentioned: {', '.join(crisis_keywords[:3])}
+Detected concerns: {', '.join(crisis_keywords[:3]) if crisis_keywords else 'distress signals'}
 
-Please provide an immediate, caring response that:
-1. Acknowledges their pain with empathy
-2. Provides immediate crisis resources (988 Suicide Prevention Lifeline, Crisis Text Line: Text HOME to 741741, Emergency: 911)
-3. Encourages them to seek immediate help
-4. Does NOT provide therapy or attempt to solve their problems
-5. Keeps the response under 300 words
+Your response MUST:
+1. Open with genuine empathy — acknowledge their pain without judgment
+2. Affirm that they are not alone and that what they feel is real
+3. Provide these crisis resources clearly:
+   - iCall India: **9152987821** (free counselling, Mon–Sat 8am–10pm)
+   - Vandrevala Foundation: **1860-2662-345** (24/7, free)
+   - AASRA: **9820466627** (24/7 suicide prevention)
+   - Emergency: **112**
+4. Ask one gentle, open-ended question to keep them engaged (e.g. "Are you somewhere safe right now?")
+5. Be warm, human, and direct — NOT clinical or robotic
+6. Keep the response under 220 words
 
 User message: "{message}"
-
-Remember: Safety first, provide resources, encourage professional help."""
-
+"""
             response = gemini_model.generate_content(prompt)
-            return response.text if response and response.text else random.choice(CRISIS_RESPONSES)
-        
-        # Detect if user is asking for specific information/lists
-        informational_keywords = [
+            return response.text.strip() if response and response.text else random.choice(CRISIS_RESPONSES)
+
+        # ── Build shared context block ────────────────────────────────────────
+        context_lines = []
+
+        if user_context:
+            memories = user_context.get('recent_memories', [])[:2]
+            if memories:
+                summaries = [m.get('content', '')[:80] for m in memories]
+                context_lines.append("Recent user context: " + " | ".join(summaries))
+
+            strategies = user_context.get('effective_strategies', [])[:3]
+            if strategies:
+                context_lines.append("Strategies that have helped this user: " + ", ".join(strategies))
+
+            tone = user_context.get('preferred_tone')
+            if tone:
+                context_lines.append(f"User prefers a {tone} communication style.")
+
+        if relevant_knowledge:
+            for item in relevant_knowledge[:2]:
+                if item.get('source') == 'knowledge_base':
+                    title = item.get('metadata', {}).get('title', 'Mental Health Info')
+                    preview = item.get('content', '')[:180]
+                    context_lines.append(f"[{title}]: {preview}...")
+
+        context_block = "\n".join(f"- {line}" for line in context_lines)
+
+        # ── Detect query type ─────────────────────────────────────────────────
+        informational_patterns = [
             'list', 'what are', 'tell me about', 'explain', 'describe', 'causes of',
             'symptoms of', 'types of', 'examples of', 'how to', 'ways to', 'methods',
             'techniques', 'strategies for', 'signs of', 'reasons for', 'factors',
-            'what causes', 'why do', 'what is', 'define', 'difference between'
+            'what causes', 'why do', 'what is', 'define', 'difference between',
+            'help me understand', 'can you explain', 'information about'
         ]
-        
-        is_informational_query = any(keyword in message.lower() for keyword in informational_keywords)
-        
-        # Build context for non-crisis responses
-        context_parts = []
-        
-        if user_context:
-            if user_context.get('recent_memories'):
-                memories = user_context['recent_memories'][:2]  # Limit to recent memories
-                context_parts.append(f"User's recent context: {', '.join([m['content'][:50] + '...' for m in memories])}")
-            
-            if user_context.get('effective_strategies'):
-                strategies = user_context['effective_strategies'][:3]
-                context_parts.append(f"Strategies that have helped this user before: {', '.join(strategies)}")
-            
-            if user_context.get('preferred_tone'):
-                context_parts.append(f"User prefers {user_context['preferred_tone']} communication style")
-        
-        # Add relevant knowledge
-        knowledge_context = []
-        if relevant_knowledge:
-            for knowledge in relevant_knowledge[:2]:  # Use top 2 knowledge items
-                if knowledge.get('source') == 'knowledge_base':
-                    title = knowledge.get('metadata', {}).get('title', 'Mental Health Information')
-                    content_preview = knowledge.get('content', '')[:200] + '...'
-                    knowledge_context.append(f"{title}: {content_preview}")
-        
-        # Construct the main prompt based on query type
-        if is_informational_query:
-            # For informational queries, prioritize comprehensive answers
-            prompt_parts = [
-                "You are Hope, a knowledgeable mental health support AI assistant.",
-                "",
-                "The user is asking for specific information. Your role:",
-                "- Provide accurate, comprehensive, and well-organized information",
-                "- Answer the question directly and completely",
-                "- Use bullet points or numbered lists when appropriate",
-                "- Include practical examples and actionable advice",
-                "- Maintain a helpful and professional tone",
-                "- You may provide longer responses (up to 300 words) for informational content",
-                "",
-                "Guidelines:",
-                "- Answer the specific question asked",
-                "- Provide factual, evidence-based information",
-                "- Organize information clearly (use lists, bullet points, or categories)",
-                "- Include practical examples where relevant",
-                "- Always mention when professional help is recommended",
-                "- Do NOT deflect to emotional support when specific information is requested",
-                ""
-            ]
+        is_informational = any(p in message.lower() for p in informational_patterns)
+        sentiment = analyze_sentiment(message)
+
+        # ── System persona (shared by all non-crisis paths) ───────────────────
+        SYSTEM_PERSONA = """You are MindWell, a warm and knowledgeable mental health support companion built into the MindWell wellness app.
+
+Core identity:
+- You are caring, non-judgmental, and always emotionally present
+- You speak like a trusted friend who also happens to have mental health knowledge
+- You NEVER diagnose, prescribe, or provide medical advice
+- You encourage professional therapy for serious concerns
+- You remember the user's context when it is provided to you
+- You do NOT start responses with "I" — vary your sentence openings
+- You do NOT use hollow phrases like "That's great!", "Absolutely!", "Certainly!" or "Of course!"
+
+Formatting rules:
+- Use **bold** for key terms, resource names, and action items
+- Use bullet points only when listing 3+ items
+- Emojis: use 0–2 per response, only when they add warmth (never for crisis topics)
+- Never use headers (##) in conversational replies
+"""
+
+        # ── Informational query prompt ────────────────────────────────────────
+        if is_informational:
+            prompt = f"""{SYSTEM_PERSONA}
+
+The user is asking an informational question about mental health. Your job:
+- Answer the question directly, accurately, and completely
+- Organise information with bullet points or numbered lists as appropriate
+- Include practical, actionable advice
+- Mention when professional help is recommended
+- Length: 120–280 words — enough to be genuinely helpful, not so long it feels like a lecture
+{f"Context about this user:{chr(10)}{context_block}" if context_block else ""}
+
+User message: "{message}"
+"""
+
+        # ── Emotional / conversational prompt ────────────────────────────────
         else:
-            # For emotional support, keep responses concise and supportive
-            prompt_parts = [
-                "You are Hope, a compassionate mental health support AI assistant.",
-                "",
-                "Your role:",
-                "- Provide emotional support and validation",
-                "- Share evidence-based coping strategies",
-                "- Encourage professional help when appropriate",
-                "- Maintain a warm, empathetic, and non-judgmental tone",
-                "",
-                "Guidelines:",
-                "- You are NOT a therapist and cannot provide therapy or medical advice",
-                "- Always prioritize user safety",
-                "- Encourage professional help for serious mental health concerns",
-                "- Keep responses between 50-80 words (2-3 sentences maximum)",
-                "- Use supportive emojis sparingly and appropriately",
-                "- Be concise but warm and empathetic",
-                ""
-            ]
-        
-        if context_parts:
-            prompt_parts.extend([
-                "User context:",
-                *[f"- {context}" for context in context_parts],
-                ""
-            ])
-        
-        if knowledge_context:
-            prompt_parts.extend([
-                "Relevant mental health information:",
-                *[f"- {knowledge}" for knowledge in knowledge_context],
-                ""
-            ])
-        
-        # Add specific instructions based on query type
-        if is_informational_query:
-            prompt_parts.append("The user is asking for specific information. Please provide a comprehensive, well-organized answer that directly addresses their question.")
-        else:
-            # Analyze sentiment for appropriate response tone
-            sentiment = analyze_sentiment(message)
+            mood_instruction = ""
             if sentiment['sentiment'] in ['negative', 'slightly_negative']:
-                prompt_parts.append("The user seems to be struggling. Please provide gentle support and practical coping strategies.")
+                mood_instruction = "The user seems to be struggling. Lead with empathy, then gently offer one concrete coping technique relevant to what they described."
             elif sentiment['sentiment'] == 'positive':
-                prompt_parts.append("The user seems to be in a better mood. Reinforce their positive feelings while remaining supportive.")
+                mood_instruction = "The user is in a positive place. Celebrate with them briefly and reinforce the habits or mindset contributing to this."
             else:
-                prompt_parts.append("Provide supportive guidance based on what the user has shared.")
-        
-        prompt_parts.extend([
-            "",
-            f'User message: "{message}"',
-            "",
-            "Please respond appropriately based on the type of question asked."
-        ])
-        
-        prompt = "\n".join(prompt_parts)
-        
-        # Generate response with Gemini
-        response = gemini_model.generate_content(prompt)
-        
+                mood_instruction = "Respond conversationally — ask a thoughtful follow-up question or offer a gentle insight based on what they shared."
+
+            prompt = f"""{SYSTEM_PERSONA}
+
+{mood_instruction}
+
+Conversation guidelines:
+- Validate feelings FIRST before any suggestions (1–2 sentences of empathy)
+- Offer 1 specific, concrete coping strategy if relevant — not a generic list
+- End with ONE open question that invites them to share more
+- Length: 60–150 words — warm and focused, never padded
+{f"Context about this user:{chr(10)}{context_block}" if context_block else ""}
+
+User message: "{message}"
+"""
+
+        # ── Build Gemini multi-turn history ──────────────────────────────────
+        gemini_history = []
+        history = conversation_history or []
+        prior = [h for h in history if not (h.get('role') == 'user' and h.get('content') == message)]
+        for turn in prior[-10:]:
+            role = 'user' if turn.get('role') == 'user' else 'model'
+            gemini_history.append({'role': role, 'parts': [turn.get('content', '')]})
+
+        chat = gemini_model.start_chat(history=gemini_history)
+        response = chat.send_message(prompt)
+
         if response and response.text:
             generated_text = response.text.strip()
-            
-            # Safety check - if response seems inappropriate, use fallback
-            if len(generated_text) < 20 or 'I cannot' in generated_text:
-                return get_ai_response(message, crisis_detected, user_context)
-            
+            if len(generated_text) < 20 or generated_text.lower().startswith("i cannot"):
+                return _static_fallback(message, crisis_detected, user_context)
             return generated_text
-        else:
-            # Fallback if no response generated
-            return get_ai_response(message, crisis_detected, user_context)
-    
+
+        return _static_fallback(message, crisis_detected, user_context)
+
     except Exception as e:
-        logger.error(f"Gemini AI response generation failed: {e}")
-        # Fallback to template response
-        return get_ai_response(message, crisis_detected, user_context)
+        import time
+        err_str = str(e)
+        if '429' in err_str or 'quota' in err_str.lower() or 'resource_exhausted' in err_str.lower():
+            _gemini_unavailable_until = time.time() + _GEMINI_QUOTA_BACKOFF
+            logger.warning(f"Gemini quota exceeded — using static fallback for {_GEMINI_QUOTA_BACKOFF // 60} min.")
+        else:
+            logger.error(f"Gemini AI response generation failed: {e}")
+        return _static_fallback(message, crisis_detected, user_context)
+
+
+def _static_fallback(message: str, is_crisis: bool, user_context: Dict) -> str:
+    """Pure static responses — no API calls, no recursion."""
+    if is_crisis or detect_crisis_keywords(message):
+        return ("What you're feeling sounds really heavy, and reaching out took courage. "
+                "You're not alone — please call **iCall: 9152987821** or **Vandrevala: 1860-2662-345** (24/7, free). "
+                "Are you somewhere safe right now?")
+    return random.choice(SUPPORTIVE_RESPONSES)
+
+
+def _build_ai_prompt(message: str, crisis_detected: bool, user_context: Dict,
+                     relevant_knowledge: list, conversation_history: list) -> tuple:
+    """Build the system persona + user prompt shared by Groq and Gemini."""
+    context_lines = []
+    if user_context:
+        memories = user_context.get('recent_memories', [])[:2]
+        if memories:
+            context_lines.append("Recent user context: " + " | ".join(m.get('content', '')[:80] for m in memories))
+        strategies = user_context.get('effective_strategies', [])[:3]
+        if strategies:
+            context_lines.append("Strategies that helped this user: " + ", ".join(strategies))
+        tone = user_context.get('preferred_tone')
+        if tone:
+            context_lines.append(f"User prefers a {tone} communication style.")
+    for item in (relevant_knowledge or [])[:2]:
+        if item.get('source') == 'knowledge_base':
+            title = item.get('metadata', {}).get('title', 'Info')
+            context_lines.append(f"[{title}]: {item.get('content','')[:180]}...")
+    context_block = "\n".join(f"- {l}" for l in context_lines)
+
+    SYSTEM_PERSONA = """You are MindWell, a warm and knowledgeable mental health support companion.
+
+Core identity:
+- Caring, non-judgmental, always emotionally present
+- Speak like a trusted friend with mental health knowledge
+- NEVER diagnose, prescribe, or provide medical advice
+- Encourage professional therapy for serious concerns
+- Do NOT start responses with "I" — vary sentence openings
+- Do NOT use hollow phrases like "Absolutely!", "Certainly!", "Of course!"
+
+Formatting:
+- **bold** for key terms and action items
+- Bullet points only when listing 3+ items
+- 0–2 emojis per response, only for warmth (never in crisis responses)
+- No headers (##) in conversational replies"""
+
+    informational_patterns = [
+        'list', 'what are', 'tell me about', 'explain', 'describe', 'causes of',
+        'symptoms of', 'types of', 'examples of', 'how to', 'ways to', 'methods',
+        'techniques', 'strategies for', 'signs of', 'what causes', 'why do',
+        'what is', 'define', 'difference between', 'help me understand', 'information about'
+    ]
+    is_informational = any(p in message.lower() for p in informational_patterns)
+    sentiment = analyze_sentiment(message)
+
+    if crisis_detected:
+        user_prompt = f"""{SYSTEM_PERSONA}
+
+A user has sent a message with crisis indicators. Your response MUST:
+1. Open with genuine empathy
+2. Affirm they are not alone
+3. Provide resources: iCall **9152987821**, Vandrevala **1860-2662-345** (24/7), Emergency **112**
+4. Ask one gentle open-ended question
+5. Under 220 words, warm and direct
+
+User message: "{message}"
+"""
+    elif is_informational:
+        user_prompt = f"""{SYSTEM_PERSONA}
+
+Answer this mental health question directly and completely.
+- Use bullets/numbers as appropriate
+- Include practical actionable advice
+- Mention professional help when relevant
+- Length: 120–280 words
+{f"User context:{chr(10)}{context_block}" if context_block else ""}
+
+User message: "{message}"
+"""
+    else:
+        if sentiment['sentiment'] in ('negative', 'slightly_negative'):
+            mood = "The user is struggling. Lead with empathy, then offer one concrete coping technique."
+        elif sentiment['sentiment'] == 'positive':
+            mood = "The user is in a positive place. Celebrate briefly and reinforce their habits."
+        else:
+            mood = "Respond conversationally — ask a thoughtful follow-up or offer a gentle insight."
+        user_prompt = f"""{SYSTEM_PERSONA}
+
+{mood}
+- Validate feelings FIRST (1–2 sentences)
+- Offer 1 specific coping strategy if relevant
+- End with ONE open question
+- Length: 60–150 words
+{f"User context:{chr(10)}{context_block}" if context_block else ""}
+
+User message: "{message}"
+"""
+    return SYSTEM_PERSONA, user_prompt
+
+
+def _generate_groq_response(message: str, crisis_detected: bool, user_context: Dict,
+                            relevant_knowledge: list, conversation_history: list) -> str:
+    """Call Groq API with llama-3.3-70b-versatile."""
+    system_persona, _ = _build_ai_prompt(
+        message, crisis_detected, user_context, relevant_knowledge, conversation_history
+    )
+
+    # Build the system instruction (persona + task for this turn)
+    if crisis_detected:
+        task = ("A user has sent a message with crisis indicators. "
+                "Open with genuine empathy, affirm they are not alone, provide crisis resources "
+                "(iCall: 9152987821, Vandrevala: 1860-2662-345, Emergency: 112), "
+                "ask one gentle open-ended question. Under 220 words.")
+    else:
+        sentiment = analyze_sentiment(message)
+        informational_patterns = [
+            'list', 'what are', 'tell me about', 'explain', 'describe', 'causes of',
+            'symptoms of', 'types of', 'examples of', 'how to', 'ways to', 'methods',
+            'techniques', 'strategies for', 'signs of', 'what causes', 'why do',
+            'what is', 'define', 'difference between', 'help me understand', 'information about'
+        ]
+        if any(p in message.lower() for p in informational_patterns):
+            task = "Answer the mental health question directly and helpfully. 120–280 words. Use bullets if listing 3+ items."
+        elif sentiment['sentiment'] in ('negative', 'slightly_negative'):
+            task = "The user is struggling. Lead with empathy, then offer one concrete coping technique. 60–150 words."
+        elif sentiment['sentiment'] == 'positive':
+            task = "The user is in a positive place. Celebrate briefly and reinforce their habits. 60–150 words."
+        else:
+            task = "Respond conversationally — ask a thoughtful follow-up or offer a gentle insight. 60–150 words."
+
+    system_message = f"{system_persona}\n\nFor this response: {task}"
+
+    # Build conversation history (prior turns only)
+    messages = [{'role': 'system', 'content': system_message}]
+    for turn in (conversation_history or [])[-10:]:
+        if turn.get('role') == 'user' and turn.get('content') == message:
+            continue  # skip current turn — added below
+        role = 'user' if turn.get('role') == 'user' else 'assistant'
+        messages.append({'role': role, 'content': turn.get('content', '')})
+
+    # Add the actual user message cleanly
+    messages.append({'role': 'user', 'content': message})
+
+    completion = groq_client.chat.completions.create(
+        model='llama-3.3-70b-versatile',
+        messages=messages,
+        temperature=0.75,
+        max_tokens=512,
+    )
+    text = completion.choices[0].message.content.strip()
+    if len(text) < 20 or text.lower().startswith('i cannot'):
+        return _static_fallback(message, crisis_detected, user_context)
+    return text
 
 # Enhanced AI functions with memory and RAG
 
-def get_enhanced_ai_response(message: str, user: CustomUser = None, 
-                           room: ChatRoom = None, message_obj: Message = None) -> Dict[str, Any]:
+def get_enhanced_ai_response(message: str, user: CustomUser = None,
+                           room: ChatRoom = None, message_obj: Message = None,
+                           conversation_history: List[Dict] = None) -> Dict[str, Any]:
     """
     Get enhanced AI response using memory, RAG, and personalization.
-    This is the main function for generating intelligent responses.
     """
+    crisis_detected = bool(detect_crisis_keywords(message))
+
     if not ENHANCED_AI_AVAILABLE:
-        # Fallback to basic response
         return {
-            'response': get_ai_response(message),
-            'memory_used': [],
-            'knowledge_used': [],
-            'crisis_detected': detect_crisis_keywords(message) != [],
-            'personalized': False
+            'response': generate_gemini_response(
+                message, crisis_detected=crisis_detected,
+                conversation_history=conversation_history or []
+            ),
+            'memory_used': [], 'knowledge_used': [],
+            'crisis_detected': crisis_detected, 'personalized': False
         }
     
     try:

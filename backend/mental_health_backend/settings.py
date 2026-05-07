@@ -191,15 +191,25 @@ if not DEBUG:
 
 
 # ─── Channels / Redis ─────────────────────────────────────────────────────────
-_redis_url = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            'hosts': [_redis_url],
+# Use InMemoryChannelLayer locally (no Redis needed).
+# In production, REDIS_URL is set by Render → use Redis-backed layer.
+_redis_url = os.environ.get('REDIS_URL', '')
+if _redis_url:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                'hosts': [_redis_url],
+            },
         },
-    },
-}
+    }
+else:
+    # Local dev without Redis — InMemoryChannelLayer works fine for a single process
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels.layers.InMemoryChannelLayer',
+        },
+    }
 
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
@@ -237,14 +247,14 @@ LOGGING = {
 }
 
 
-# ─── Email ────────────────────────────────────────────────────────────────────
+# ─── Email (Gmail SMTP) ───────────────────────────────────────────────────────
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend' if DEBUG else 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.sendgrid.net')
-EMAIL_PORT = int(os.environ.get('EMAIL_PORT', 587))
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@healhope.com')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')       # your Gmail address
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')  # Gmail App Password
+DEFAULT_FROM_EMAIL = os.environ.get('EMAIL_HOST_USER', 'noreply@mindwell.com')
 
 
 # ─── Custom User Model ────────────────────────────────────────────────────────
@@ -258,7 +268,7 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = False
 SESSION_COOKIE_SECURE = not DEBUG   # HTTPS-only in production
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_NAME = 'healhope_sessionid'
+SESSION_COOKIE_NAME = 'mindwell_sessionid'
 
 
 # ─── CSRF trusted origins (expanded at deploy time via env) ───────────────────
@@ -276,12 +286,19 @@ CSRF_TRUSTED_ORIGINS = _csrf_origins or [
 AI_SERVICE = os.environ.get('AI_SERVICE', 'openai')   # 'openai' or 'gemini'
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 GEMINI_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 MEM0_API_KEY = os.environ.get('MEM0_API_KEY', '')
 VECTOR_DB_TYPE = os.environ.get('VECTOR_DB_TYPE', 'chroma')
 VECTOR_DB_PATH = os.environ.get('VECTOR_DB_PATH', str(BASE_DIR / 'vector_db'))
 DEFAULT_MODEL = os.environ.get('DEFAULT_MODEL', 'gpt-3.5-turbo')
 EMBEDDING_MODEL = os.environ.get('EMBEDDING_MODEL', 'text-embedding-ada-002')
 DEBUG_AI = os.environ.get('DEBUG_AI', 'False').lower() == 'true'
+
+# ── Web Push (VAPID) ──────────────────────────────────────────────────────────
+VAPID_PUBLIC_KEY  = os.environ.get('VAPID_PUBLIC_KEY', '')
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
+VAPID_CLAIMS_EMAIL = os.environ.get('VAPID_CLAIMS_EMAIL', 'mailto:admin@mindwell.com')
 
 
 # Ensure logs directory exists

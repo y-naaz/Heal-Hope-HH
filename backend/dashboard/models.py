@@ -210,6 +210,51 @@ class MeditationSession(models.Model):
     def __str__(self):
         return f"{self.user.username} - {self.session_name} ({self.duration_minutes}min)"
 
+class SafetyPlan(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='safety_plan')
+
+    # Section 1 — Warning Signs
+    warning_signs_personal   = models.TextField(blank=True)
+    warning_signs_observable = models.TextField(blank=True)
+
+    # Section 2 — Internal Coping Strategies
+    coping_strategies = models.TextField(blank=True)
+    # [{strategy, tried_count, avg_rating}]
+    coping_effectiveness = models.JSONField(default=list, blank=True)
+
+    # Section 3 — Social Support  [{name, phone, relationship}]
+    support_contacts = models.JSONField(default=list, blank=True)
+
+    # Section 4 — Professional Contacts  [{name, phone, role}]
+    professional_contacts = models.JSONField(default=list, blank=True)
+
+    # Section 5 — Safe Environment
+    environment_safety = models.TextField(blank=True)
+
+    # Section 6 — Reasons for Living
+    reasons_for_living = models.TextField(blank=True)
+
+    # Meta
+    last_reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at       = models.DateTimeField(auto_now_add=True)
+    updated_at       = models.DateTimeField(auto_now=True)
+
+    def completion_pct(self):
+        fields = [
+            self.warning_signs_personal,
+            self.coping_strategies,
+            self.support_contacts,
+            self.professional_contacts,
+            self.environment_safety,
+            self.reasons_for_living,
+        ]
+        filled = sum(1 for f in fields if f)
+        return round(filled / len(fields) * 100)
+
+    def __str__(self):
+        return f"{self.user.username} — Safety Plan ({self.completion_pct()}% complete)"
+
+
 class DashboardInsight(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='dashboard_insights')
     insight_type = models.CharField(max_length=50)  # mood_trend, goal_progress, etc.

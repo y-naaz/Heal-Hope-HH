@@ -1,8 +1,28 @@
 from rest_framework import serializers
 from .models import (
-    MoodEntry, JournalEntry, Goal, Activity, Appointment, 
-    UserSettings, MeditationSession, DashboardInsight
+    MoodEntry, JournalEntry, Goal, Activity, Appointment,
+    UserSettings, MeditationSession, DashboardInsight, SafetyPlan
 )
+
+
+class SafetyPlanSerializer(serializers.ModelSerializer):
+    completion_pct = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SafetyPlan
+        fields = [
+            'id',
+            'warning_signs_personal', 'warning_signs_observable',
+            'coping_strategies', 'coping_effectiveness',
+            'support_contacts', 'professional_contacts',
+            'environment_safety', 'reasons_for_living',
+            'last_reviewed_at', 'completion_pct',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'completion_pct', 'created_at', 'updated_at']
+
+    def get_completion_pct(self, obj):
+        return obj.completion_pct()
 
 class MoodEntrySerializer(serializers.ModelSerializer):
     class Meta:

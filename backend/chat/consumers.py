@@ -11,6 +11,26 @@ import logging
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
+
+@database_sync_to_async
+def _get_user_from_token(token_key):
+    """Authenticate a WS connection via DRF Token passed as ?token= query param."""
+    from rest_framework.authtoken.models import Token
+    try:
+        return Token.objects.select_related('user').get(key=token_key).user
+    except Token.DoesNotExist:
+        return None
+
+
+def _token_from_scope(scope):
+    """Extract ?token= value from the WebSocket query string."""
+    qs = scope.get('query_string', b'').decode()
+    for part in qs.split('&'):
+        if part.startswith('token='):
+            return part[6:]
+    return ''
+
+
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.room_name = self.scope['url_route']['kwargs']['room_name']
@@ -625,19 +645,7 @@ class SupportConsumer(ChatConsumer):
             logger.error(f"Error creating support room: {str(e)}")
 
     async def send_support_welcome(self):
-        welcome_message = """
-Hello! I'm here to provide you with crisis support and mental health assistance. 
-
-🆘 If you're in immediate danger, please call emergency services (911, 988, or your local emergency number).
-
-I can help you with:
-• Crisis intervention and support
-• Coping strategies and techniques
-• Resource recommendations
-• Connecting you with professional help
-
-How are you feeling right now? Please tell me what's going on.
-        """
+        welcome_message = "Hi, I'm glad you're here. Take your time — share whatever feels right, and I'll do my best to support you."
         
         ai_message = await self.save_ai_message(welcome_message.strip(), None)
         if ai_message:
@@ -701,3 +709,211 @@ Remember: You are not alone, and help is available. Your life matters.
             )
         except Exception as e:
             logger.error(f"Error creating immediate crisis alert: {str(e)}")
+
+
+class CommunityConsumer(AsyncWebsocketConsumer):
+    """Real-time community feed: all connected users share one group."""
+
+    COMMUNITY_GROUP = 'community_feed'
+
+    async def connect(self):
+        self.user = self.scope['user']
+        if self.user.is_anonymous:
+            token_key = _token_from_scope(self.scope)
+            if token_key:
+                self.user = await _get_user_from_token(token_key) or self.user
+        if self.user.is_anonymous:
+            await self.close()
+            return
+
+        await self.channel_layer.group_add(self.COMMUNITY_GROUP, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        if hasattr(self, 'COMMUNITY_GROUP'):
+            await self.channel_layer.group_discard(self.COMMUNITY_GROUP, self.channel_name)
+
+    async def receive(self, text_data):
+        try:
+            data = json.loads(text_data)
+            msg_type = data.get('type')
+
+            if msg_type == 'new_post':
+                await self.handle_new_post(data)
+            elif msg_type == 'like_post':
+                await self.handle_like_post(data)
+        except json.JSONDecodeError:
+            pass
+        except Exception as e:
+            logger.error(f"CommunityConsumer.receive error: {e}")
+
+    async def handle_new_post(self, data):
+        content = data.get('content', '').strip()
+        category = data.get('category', 'general')
+        is_anonymous = bool(data.get('is_anonymous', False))
+
+        if not content or len(content) > 1000:
+            await self.send(text_data=json.dumps({
+                'type': 'error',
+                'message': 'Post content is required and must be ≤ 1000 characters.'
+            }))
+            return
+
+        valid_categories = ['general', 'success', 'question', 'resource']
+        if category not in valid_categories:
+            category = 'general'
+
+        post = await self._create_post(content, category, is_anonymous)
+
+        await self.channel_layer.group_send(
+            self.COMMUNITY_GROUP,
+            {
+                'type': 'community_new_post',
+                'post': self._serialize_post(post),
+            }
+        )
+
+    async def handle_like_post(self, data):
+        post_id = data.get('post_id')
+        if not post_id:
+            return
+
+        result = await self._toggle_like(post_id)
+        if result:
+            await self.channel_layer.group_send(
+                self.COMMUNITY_GROUP,
+                {
+                    'type': 'community_post_liked',
+                    'post_id': post_id,
+                    'like_count': result['count'],
+                    'liked_by': result['liked_by'],
+                }
+            )
+
+    # ── Group message handlers ─────────────────────────────────────────────
+
+    async def community_new_post(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'new_post',
+            'post': event['post'],
+        }))
+
+    async def community_post_liked(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'post_liked',
+            'post_id': event['post_id'],
+            'like_count': event['like_count'],
+            'liked_by': event['liked_by'],
+        }))
+
+    # ── DB helpers ─────────────────────────────────────────────────────────
+
+    @database_sync_to_async
+    def _create_post(self, content, category, is_anonymous):
+        from .models import CommunityPost
+        return CommunityPost.objects.create(
+            author=self.user,
+            content=content,
+            category=category,
+            is_anonymous=is_anonymous,
+        )
+
+    @database_sync_to_async
+    def _toggle_like(self, post_id):
+        from .models import CommunityPost
+        try:
+            post = CommunityPost.objects.get(pk=post_id)
+        except CommunityPost.DoesNotExist:
+            return None
+
+        if post.likes.filter(pk=self.user.pk).exists():
+            post.likes.remove(self.user)
+        else:
+            post.likes.add(self.user)
+
+        return {
+            'count': post.likes.count(),
+            'liked_by': self.user.id,
+        }
+
+    def _serialize_post(self, post):
+        author_name = 'Anonymous' if post.is_anonymous else (
+            post.author.first_name or post.author.username or post.author.email.split('@')[0]
+        )
+        return {
+            'id': post.pk,
+            'content': post.content,
+            'category': post.get_category_display(),
+            'category_key': post.category,
+            'author': author_name,
+            'author_id': None if post.is_anonymous else post.author.id,
+            'is_anonymous': post.is_anonymous,
+            'like_count': 0,
+            'is_liked': False,
+            'created_at': post.created_at.isoformat(),
+        }
+
+
+class GroupChatConsumer(AsyncWebsocketConsumer):
+    """Real-time chat for a specific support group (members only)."""
+
+    async def connect(self):
+        self.group_id = self.scope['url_route']['kwargs']['group_id']
+        self.user = self.scope['user']
+
+        if self.user.is_anonymous:
+            token_key = _token_from_scope(self.scope)
+            if token_key:
+                self.user = await _get_user_from_token(token_key) or self.user
+        if self.user.is_anonymous:
+            await self.close()
+            return
+
+        is_member = await self._check_membership()
+        if not is_member:
+            await self.close()
+            return
+
+        self.room_group = f'group_{self.group_id}_chat'
+        await self.channel_layer.group_add(self.room_group, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        if hasattr(self, 'room_group'):
+            await self.channel_layer.group_discard(self.room_group, self.channel_name)
+
+    async def receive(self, text_data):
+        try:
+            data = json.loads(text_data)
+            content = (data.get('message') or '').strip()
+            if not content or len(content) > 2000:
+                return
+
+            sender_name = self.user.first_name or self.user.username or self.user.email.split('@')[0]
+            msg = {
+                'sender': sender_name,
+                'sender_id': self.user.id,
+                'content': content,
+                'created_at': datetime.utcnow().isoformat() + 'Z',
+            }
+
+            await self.channel_layer.group_send(
+                self.room_group,
+                {'type': 'group_message', 'msg': msg}
+            )
+        except Exception as e:
+            logger.error(f'GroupChatConsumer.receive error: {e}')
+
+    async def group_message(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'message',
+            'message': event['msg'],
+        }))
+
+    @database_sync_to_async
+    def _check_membership(self):
+        from .models import SupportGroup
+        try:
+            return SupportGroup.objects.filter(pk=self.group_id, members=self.user).exists()
+        except Exception:
+            return False

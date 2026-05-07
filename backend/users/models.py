@@ -144,3 +144,15 @@ class JournalEntry(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.title} ({self.created_at.date()})"
+
+
+class PushSubscription(models.Model):
+    """Stores browser push notification subscriptions per user."""
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='push_subscriptions')
+    endpoint = models.TextField(unique=True)
+    p256dh = models.TextField()
+    auth = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Push subscription for {self.user.email}"

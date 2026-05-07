@@ -190,3 +190,73 @@ class AIResponse(models.Model):
 
     def __str__(self):
         return f"AI Response to: {self.message.content[:30]}..."
+
+
+class CommunityPost(models.Model):
+    CATEGORY_CHOICES = [
+        ('general', 'General Support'),
+        ('success', 'Success Story'),
+        ('question', 'Question'),
+        ('resource', 'Resource Share'),
+    ]
+
+    author = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='community_posts')
+    content = models.TextField(max_length=1000)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='general')
+    is_anonymous = models.BooleanField(default=False)
+    likes = models.ManyToManyField(CustomUser, related_name='liked_community_posts', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.author.email}: {self.content[:50]}"
+
+    @property
+    def like_count(self):
+        return self.likes.count()
+
+    def is_liked_by(self, user):
+        return self.likes.filter(pk=user.pk).exists()
+
+
+class SupportGroup(models.Model):
+    GROUP_TYPES = [
+        ('open', 'Open Group'),
+        ('moderated', 'Moderated'),
+        ('age_specific', 'Age-Specific'),
+    ]
+    FORMAT_CHOICES = [
+        ('online', 'Online'),
+        ('hybrid', 'Hybrid'),
+        ('in_person', 'In-Person'),
+    ]
+
+    name = models.CharField(max_length=200, unique=True)
+    description = models.TextField()
+    group_type = models.CharField(max_length=15, choices=GROUP_TYPES, default='open')
+    format_type = models.CharField(max_length=10, choices=FORMAT_CHOICES, default='online')
+    schedule_day = models.CharField(max_length=30, blank=True)
+    schedule_time = models.CharField(max_length=20, blank=True)
+    members = models.ManyToManyField(CustomUser, related_name='support_groups', blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def member_count(self):
+        return self.members.count()
+
+    @property
+    def format_icon(self):
+        return {'online': 'fas fa-video', 'hybrid': 'fas fa-map-marker-alt', 'in_person': 'fas fa-map-marker-alt'}.get(self.format_type, 'fas fa-video')
+
+    @property
+    def group_type_label(self):
+        return {'open': 'Open Group', 'moderated': 'Moderated', 'age_specific': 'Age-Specific'}.get(self.group_type, 'Open Group')
