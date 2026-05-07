@@ -22,8 +22,8 @@ openai==1.54.3
 google-generativeai==0.8.3
 python-dotenv==1.0.1
 
-# Mem0 (lightweight API client)
-mem0ai==0.0.11
+# Mem0 (lightweight API client — pin to avoid breaking changes)
+mem0ai==0.1.98
 
 # Utilities
 requests==2.32.3

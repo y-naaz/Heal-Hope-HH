@@ -2985,3 +2985,94 @@
         grid-template-columns: 1fr;
     }
 }
+
+/* ── SOS Floating Button ────────────────────────────────────────────────────── */
+
+#sosFab {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 9500;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #dc2626, #991b1b);
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    cursor: pointer;
+    box-shadow: 0 4px 20px rgba(220, 38, 38, 0.5);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    animation: sos-pulse 3s infinite;
+}
+
+#sosFab:hover {
+    transform: scale(1.08);
+    box-shadow: 0 6px 28px rgba(220, 38, 38, 0.65);
+    animation: none;
+}
+
+#sosFab i {
+    font-size: 18px;
+}
+
+.sos-label {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    line-height: 1;
+}
+
+@keyframes sos-pulse {
+    0%, 100% { box-shadow: 0 4px 20px rgba(220,38,38,0.5); }
+    50%       { box-shadow: 0 4px 32px rgba(220,38,38,0.8), 0 0 0 8px rgba(220,38,38,0.1); }
+}
+
+/* ── Safety Plan Wizard ─────────────────────────────────────────────────────── */
+
+.safety-plan-section {
+    margin-bottom: var(--spacing-6);
+    padding-bottom: var(--spacing-6);
+    border-bottom: 1px solid var(--gray-100);
+}
+
+.safety-plan-section h3 {
+    font-size: var(--font-size-base);
+    font-weight: 600;
+    color: var(--gray-900);
+    margin-bottom: var(--spacing-2);
+}
+
+.safety-plan-section p {
+    font-size: var(--font-size-sm);
+    color: var(--gray-600);
+    margin-bottom: var(--spacing-3);
+}
+
+.safety-plan-section textarea,
+.safety-plan-section input {
+    width: 100%;
+    padding: var(--spacing-3);
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius-lg);
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    resize: vertical;
+    transition: border-color 0.15s;
+    box-sizing: border-box;
+    margin-bottom: var(--spacing-2);
+}
+
+.safety-plan-section textarea:focus,
+.safety-plan-section input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+@media print {
+    #sosFab, .sidebar, .main-content > *:not(#crisis-support),
+    #safetyPlanNudge, #sosOverlay { display: none !important; }
+}
