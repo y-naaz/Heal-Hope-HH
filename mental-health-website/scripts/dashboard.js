@@ -34,9 +34,9 @@ const _metaApiUrl = document.querySelector('meta[name="api-base-url"]');
 const _metaWsUrl  = document.querySelector('meta[name="ws-base-url"]');
 
 const API_BASE_URL  = _dashIsLocal ? 'http://localhost:8000'
-    : ((_metaApiUrl && _metaApiUrl.content) ? _metaApiUrl.content.replace(/\/$/, '') : 'https://mindwell-backend.onrender.com');
+    : ((_metaApiUrl && _metaApiUrl.content) ? _metaApiUrl.content.replace(/\/$/, '') : 'https://healhope-backend.onrender.com');
 const CHAT_WS_URL   = _dashIsLocal ? 'ws://localhost:8000'
-    : ((_metaWsUrl  && _metaWsUrl.content)  ? _metaWsUrl.content.replace(/\/$/, '')  : 'wss://mindwell-backend.onrender.com');
+    : ((_metaWsUrl  && _metaWsUrl.content)  ? _metaWsUrl.content.replace(/\/$/, '')  : 'wss://healhope-backend.onrender.com');
 const SUPPORT_AVATAR_URL = 'https://randomuser.me/api/portraits/women/68.jpg?v=20260505';
 const SUPPORT_AVATAR_FALLBACK_URL = 'https://i.pravatar.cc/120?img=47';
 

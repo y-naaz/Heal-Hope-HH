@@ -1168,7 +1168,7 @@ document.head.appendChild(pausedStyles);
 // Service Worker registration for PWA capabilities (optional)
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').then((registration) => {
+        navigator.serviceWorker.register('/service-worker.js').then((registration) => {
             console.log('SW registered: ', registration);
         }).catch((registrationError) => {
             console.log('SW registration failed: ', registrationError);
@@ -3185,20 +3185,23 @@ function getUserData(key) {
 // Analytics tracking (placeholder for real analytics)
 function trackEvent(eventName, data = {}) {
     console.log('Analytics Event:', eventName, data);
-    
+
     // Store events locally for demo purposes
-    const events = getUserData('analyticsEvents') || [];
+    let events;
+    try {
+        const raw = localStorage.getItem('analyticsEvents');
+        events = raw ? JSON.parse(raw) : [];
+        if (!Array.isArray(events)) events = [];
+    } catch (e) {
+        events = [];
+    }
     events.push({
         event: eventName,
         data,
         timestamp: new Date().toISOString()
     });
-    
-    if (events.length > 100) {
-        events.splice(0, 50); // Keep only latest 100 events
-    }
-    
-    saveUserData('analyticsEvents', events);
+    if (events.length > 100) events.splice(0, 50);
+    try { localStorage.setItem('analyticsEvents', JSON.stringify(events)); } catch (e) {}
 }
 
 // Newsletter subscription handler
