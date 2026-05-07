@@ -1,10 +1,281 @@
-# 🧠 Heal & Hope (HH) - CBT Mental Health Platform
+# 🧠 MindWell — Mental Health & Wellness Platform
 
-A comprehensive mental health platform featuring Cognitive Behavioral Therapy (CBT) tools, AI-powered support, and personalized dashboard for mental wellness tracking. **Primarily designed for Indian users** with culturally sensitive mental health support and local crisis resources.
+A full-stack mental health platform with AI-powered chat support, real-time community, mood tracking, journaling, goal management, and support groups. Designed for Indian users with culturally sensitive responses and local crisis resources.
 
-[![Python](https://img.shields.io/badge/python-v3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Django](https://img.shields.io/badge/django-v5.2.5-green.svg)](https://djangoproject.com/)
+**Live Demo:**
+- 🌐 Frontend: [heal-hope-hh.vercel.app](https://heal-hope-hh.vercel.app)
+- ⚙️ Backend API: [mindwell-backend.onrender.com](https://mindwell-backend.onrender.com)
+
+[![Django](https://img.shields.io/badge/Django-5.2.5-green.svg)](https://djangoproject.com/)
+[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
+[![Channels](https://img.shields.io/badge/Django_Channels-4.1-purple.svg)](https://channels.readthedocs.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+---
+
+## ✨ Features
+
+### 🤖 AI Chat Support
+- **Groq + Llama 3.3 70B** as primary AI (14,400 free req/day)
+- Google Gemini 2.0 Flash as fallback
+- MindWell persona — warm, non-judgmental, culturally aware
+- Multi-turn conversation history
+- Crisis detection with immediate Indian helpline resources
+- Circuit-breaker prevents quota spam errors
+
+### 💬 Real-Time Community
+- **WebSocket-powered community feed** — posts appear instantly for all users
+- Post categories: General Support, Success Story, Question, Resource Share
+- Anonymous posting option
+- Like system with live count updates
+- HTTP fallback when WebSocket unavailable
+
+### 👥 Support Groups
+- 3 default groups: Anxiety Support Circle, Depression Recovery Hub, Young Adults Circle
+- Join / Leave groups with real member counts
+- **Members-only real-time group chat** via WebSocket
+- Group types: Open, Moderated, Age-specific
+- Format: Online, Hybrid, In-person
+
+### 📊 Personal Dashboard
+- Mood tracking with trend analytics and charts
+- Private journal with writing streaks
+- Goal setting and progress tracking
+- Appointment scheduling
+- Meditation session logging
+- AI-generated personalized insights
+
+### 🛡️ Coping Tools
+- **Box Breathing** interactive timer (4-4-4-4)
+- **5-4-3-2-1 Grounding** technique with guided prompts
+- **Ice Cube** distress tolerance technique
+- Modal-based with animations
+
+### 📧 Notifications
+- Gmail SMTP email notifications
+- Goal deadline reminders (daily cron at 08:00 UTC)
+- Web Push notifications (VAPID)
+
+### 🔐 Authentication
+- Email/password registration and login
+- DRF Token auth + Django session auth
+- Auth tokens passed as `?token=` for WebSocket connections
+
+---
+
+## 🏗️ Architecture
+
+```
+Heal-Hope-HH/
+├── backend/                          # Django 5.2 + Daphne ASGI
+│   ├── mental_health_backend/
+│   │   ├── settings.py               # All config via env vars
+│   │   ├── urls.py
+│   │   └── asgi.py                   # Channels routing
+│   ├── chat/
+│   │   ├── models.py                 # ChatRoom, Message, CommunityPost, SupportGroup
+│   │   ├── consumers.py              # ChatConsumer, CommunityConsumer, GroupChatConsumer
+│   │   ├── ai_support.py             # Groq/Gemini AI with circuit-breaker
+│   │   ├── views.py                  # AI chat, community posts/groups REST API
+│   │   └── routing.py                # WebSocket URL patterns
+│   ├── dashboard/
+│   │   ├── models.py                 # Mood, Journal, Goal, Activity, Appointment
+│   │   └── views.py                  # Dashboard REST API + AI insights
+│   ├── users/
+│   │   ├── models.py                 # CustomUser, PushSubscription
+│   │   └── views.py                  # Auth, profile, push notifications
+│   ├── email_service.py              # Gmail SMTP helpers
+│   ├── requirements.txt
+│   └── .env.example
+├── mental-health-website/            # Vanilla JS frontend (Vercel)
+│   ├── index.html                    # Landing page
+│   ├── dashboard.html                # Main app (meta tags → Render URL)
+│   ├── scripts/
+│   │   ├── main.js                   # Auth, landing page
+│   │   └── dashboard.js              # All dashboard logic, WS, community, groups
+│   └── styles/
+│       ├── main.css
+│       ├── dashboard.css
+│       └── chat.css
+├── render.yaml                       # Render deployment config
+└── vercel.json                       # Vercel static deployment config
+```
+
+### WebSocket Routes
+| URL | Consumer | Auth |
+|---|---|---|
+| `ws/chat/<room>/` | `ChatConsumer` | Token or session |
+| `ws/community/` | `CommunityConsumer` | Token or session |
+| `ws/community/group/<id>/` | `GroupChatConsumer` | Token, members-only |
+| `ws/support/<user_id>/` | `SupportConsumer` | Token or session |
+| `ws/crisis/<user_id>/` | `CrisisConsumer` | Token or session |
+
+> WebSocket auth: since browsers can't send custom headers on WS connections, the token is passed as `?token=<key>` in the URL and resolved server-side.
+
+---
+
+## 🚀 Local Development
+
+### Prerequisites
+- Python 3.11+
+- Git
+- [Groq API key](https://console.groq.com) (free, 14,400 req/day)
+
+### 1. Clone
+```bash
+git clone https://github.com/y-naaz/Heal-Hope-HH.git
+cd Heal-Hope-HH
+```
+
+### 2. Backend Setup
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 3. Environment Variables
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+```env
+DEBUG=True
+SECRET_KEY=any-random-string-for-dev
+
+# AI (get free key at console.groq.com)
+GROQ_API_KEY=gsk_...
+
+# Optional — Gemini fallback (get at aistudio.google.com)
+GOOGLE_API_KEY=AIza...
+
+# Email (optional for dev — uses console backend when DEBUG=True)
+EMAIL_HOST_USER=yourname@gmail.com
+EMAIL_HOST_PASSWORD=your-app-password
+```
+
+### 4. Database & Seed Data
+```bash
+python manage.py migrate
+python manage.py seed_support_groups    # seeds 3 default support groups
+```
+
+### 5. Run
+```bash
+python manage.py runserver 8000
+```
+
+### 6. Frontend
+Open `mental-health-website/index.html` in a browser, or use Live Server in VS Code.
+
+The JS automatically detects `localhost` and uses `http://localhost:8000` regardless of the meta tag.
+
+---
+
+## 🔑 API Reference
+
+### Authentication (`/users/`)
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/users/auth/signup/` | Register |
+| POST | `/users/auth/login/` | Login → returns `token` |
+| POST | `/users/auth/logout/` | Logout |
+| GET | `/users/auth/profile/` | Get profile |
+| GET | `/users/auth/status/` | Check auth (token or session) |
+
+### Dashboard (`/dashboard/`)
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/dashboard/overview/` | Stats, mood trend, goals |
+| POST/GET | `/dashboard/mood-entries/` | Mood logging |
+| POST/GET | `/dashboard/journal-entries/` | Journal |
+| POST/GET | `/dashboard/goals/` | Goals |
+| POST/GET | `/dashboard/appointments/` | Appointments |
+
+### Chat & AI (`/chat/`)
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | `/chat/ai-chat/` | AI chat (Groq/Gemini) |
+| GET/POST | `/chat/community/posts/` | Community posts |
+| POST | `/chat/community/posts/<id>/like/` | Toggle like |
+| GET | `/chat/community/groups/` | List support groups |
+| POST | `/chat/community/groups/<id>/join/` | Toggle join/leave |
+
+---
+
+## 🚢 Deployment
+
+### Stack
+- **Backend**: Render (free tier, Daphne ASGI)
+- **Frontend**: Vercel (static)
+- **Database**: Render PostgreSQL (free tier)
+- **Redis**: Render Redis (WebSocket channel layer)
+
+### Environment Variables (set in Render dashboard)
+
+| Key | Description |
+|---|---|
+| `SECRET_KEY` | Django secret key (auto-generated by Render) |
+| `DEBUG` | `False` |
+| `ALLOWED_HOSTS` | `mindwell-backend.onrender.com,.onrender.com` |
+| `CORS_ALLOWED_ORIGINS` | `https://heal-hope-hh.vercel.app,https://healhope.vercel.app` |
+| `DATABASE_URL` | Auto-set by Render PostgreSQL |
+| `REDIS_URL` | Auto-set by Render Redis |
+| `GROQ_API_KEY` | Groq API key |
+| `GOOGLE_API_KEY` | Gemini API key (fallback) |
+| `EMAIL_HOST_USER` | Gmail address |
+| `EMAIL_HOST_PASSWORD` | Gmail App Password |
+| `VAPID_PUBLIC_KEY` | Web push public key |
+| `VAPID_PRIVATE_KEY` | Web push private key |
+| `VAPID_CLAIMS_EMAIL` | `mailto:admin@healhope.com` |
+
+### Post-Deploy Steps
+```bash
+# In Render Shell (or add to buildCommand):
+python manage.py seed_support_groups
+```
+
+### Deploy Triggers
+- Push to `main` → Render auto-deploys backend, Vercel auto-deploys frontend
+
+---
+
+## 🆘 Crisis Resources (India)
+
+| Resource | Contact |
+|---|---|
+| Emergency | **112** |
+| iCall (Mon–Sat 8AM–10PM) | **9152987821** |
+| Vandrevala Foundation (24/7) | **1860-2662-345** |
+| AASRA (24/7) | **9820466627** |
+| Sneha India (24/7) | **044-24640050** |
+
+---
+
+## 🐛 Troubleshooting
+
+**Chatbot not responding / quota errors**
+The circuit-breaker in `ai_support.py` trips after a 429 quota error and falls back to static responses for 1 hour. Groq free tier resets daily. Switch API key or wait.
+
+**WebSocket connection failing**
+- On localhost: ensure Django server is running on port 8000
+- On deployed: check Render Redis is running (channel layer requires Redis)
+- Auth error: make sure `authToken` is in localStorage before opening chat
+
+**CORS errors on deployed site**
+Set `CORS_ALLOWED_ORIGINS` in Render dashboard to match your exact Vercel URL (no trailing slash).
+
+**Build failing on Render**
+Check Render → Events → Logs. Common causes: missing env var, `mem0ai` install failure.
+
+---
+
+## 📄 License
+
+MIT License — see [LICENSE](LICENSE) for details.
+
 
 ## 🌟 Features
 

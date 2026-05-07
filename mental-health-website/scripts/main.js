@@ -745,23 +745,47 @@ class MindWellApp {
 
     // Check authentication status
     async checkAuthStatus() {
+        const token = localStorage.getItem('authToken');
+        const headers = token ? { 'Authorization': `Token ${token}` } : {};
+
+        // Helper: fetch with a hard timeout
+        const fetchWithTimeout = (url, opts, ms = 6000) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), ms);
+            return fetch(url, { ...opts, signal: controller.signal })
+                .finally(() => clearTimeout(timer));
+        };
+
+        const tryFetch = async () => {
+            const response = await fetchWithTimeout(
+                `${API_BASE_URL}/users/auth/status/`, { headers }
+            );
+            return response.json();
+        };
+
         try {
-            const token = localStorage.getItem('authToken');
-            const headers = token ? { 'Authorization': `Token ${token}` } : {};
-            const response = await fetch(`${API_BASE_URL}/users/auth/status/`, { headers });
-            const result = await response.json();
+            let result;
+            try {
+                result = await tryFetch();
+            } catch (_) {
+                // First attempt failed (server sleeping / not started).
+                // On Render, wait 3 s then retry once so cold-start wakeups succeed.
+                if (!_mainIsLocal) {
+                    await new Promise(r => setTimeout(r, 3000));
+                    result = await tryFetch();
+                } else {
+                    throw _;
+                }
+            }
 
             if (result.authenticated) {
-                // User is logged in, update UI
                 this.updateAuthUI(result.user);
             } else {
-                // User is not logged in, clear any stale data
                 localStorage.removeItem('user');
                 localStorage.removeItem('isAuthenticated');
             }
-        } catch (error) {
-            console.error('Auth check failed:', error);
-            // Fallback to local storage check
+        } catch (_) {
+            // Backend unreachable — use cached auth state silently
             const isAuthenticated = localStorage.getItem('isAuthenticated');
             if (isAuthenticated === 'true') {
                 const user = JSON.parse(localStorage.getItem('user') || '{}');

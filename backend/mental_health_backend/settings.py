@@ -126,14 +126,25 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 _cors_raw = os.environ.get('CORS_ALLOWED_ORIGINS', '')
-CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_raw.split(',') if o.strip()] or [
+_cors_from_env = [o.strip() for o in _cors_raw.split(',') if o.strip()]
+# Merge env var origins WITH hardcoded trusted origins so a stale env value
+# never blocks the live frontend.
+_cors_always = [
+    'https://heal-hope-hh.vercel.app',
+    'https://healhope.vercel.app',
+    'https://heal-hope.vercel.app',
+    'https://mindwell-sigma.vercel.app',
+    'https://mindwell-backend.onrender.com',
     'http://localhost:3000',
     'http://127.0.0.1:3000',
     'http://localhost:8000',
     'http://127.0.0.1:8000',
     'http://localhost:8080',
     'http://127.0.0.1:8080',
+    'http://localhost:5500',
+    'http://127.0.0.1:5500',
 ]
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_cors_from_env + _cors_always))
 # NEVER open CORS to all origins in production
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # True only in dev
 CORS_ALLOW_CREDENTIALS = True
@@ -271,17 +282,8 @@ SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_NAME = 'mindwell_sessionid'
 
 
-# ─── CSRF trusted origins (expanded at deploy time via env) ───────────────────
-_csrf_raw = os.environ.get('CORS_ALLOWED_ORIGINS', '')
-_csrf_origins = [o.strip() for o in _csrf_raw.split(',') if o.strip()]
-CSRF_TRUSTED_ORIGINS = _csrf_origins or [
-    'http://localhost:8000',
-    'http://127.0.0.1:8000',
-    'http://localhost:3000',
-    'http://127.0.0.1:3000',
-    'https://heal-hope-hh.vercel.app',
-    'https://mindwell-backend.onrender.com',
-]
+# ─── CSRF trusted origins (same set as CORS, always merged) ──────────────────
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(_cors_from_env + _cors_always))
 
 
 # ─── AI / Memory Configuration ───────────────────────────────────────────────
