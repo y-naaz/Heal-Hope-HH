@@ -15,9 +15,9 @@ services:
       - key: DEBUG
         value: "False"
       - key: ALLOWED_HOSTS
-        value: mindwell-backend.onrender.com,.onrender.com,localhost,127.0.0.1
+        value: healhope-backend.onrender.com,.onrender.com,localhost,127.0.0.1
       - key: CORS_ALLOWED_ORIGINS
-        value: https://heal-hope-hh.vercel.app,https://healhope.vercel.app,https://heal-hope.vercel.app,https://mindwell-backend.onrender.com
+        value: https://heal-hope-hh.vercel.app,https://healhope.vercel.app,https://heal-hope.vercel.app,https://healhope-backend.onrender.com
       - key: DATABASE_URL
         fromDatabase:
           name: mindwell-db
