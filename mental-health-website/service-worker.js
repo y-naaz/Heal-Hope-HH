@@ -1,5 +1,6 @@
-// MindWell Service Worker — handles background push notifications
-const CACHE_NAME = 'mindwell-v1';
+// MindWell Service Worker — push notifications + safety plan offline cache
+const CACHE_NAME   = 'mindwell-v2';
+const SP_CACHE_KEY = 'mindwell-safety-plan';
 
 // ── Install ───────────────────────────────────────────────────────────────────
 self.addEventListener('install', event => {
@@ -8,7 +9,24 @@ self.addEventListener('install', event => {
 
 // ── Activate ──────────────────────────────────────────────────────────────────
 self.addEventListener('activate', event => {
-    event.waitUntil(clients.claim());
+    event.waitUntil(
+        caches.keys().then(keys =>
+            Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+        ).then(() => clients.claim())
+    );
+});
+
+// ── Message from page: cache safety plan ─────────────────────────────────────
+self.addEventListener('message', event => {
+    if (event.data?.type === 'CACHE_SAFETY_PLAN') {
+        const plan = event.data.plan;
+        caches.open(CACHE_NAME).then(cache => {
+            const resp = new Response(JSON.stringify(plan), {
+                headers: { 'Content-Type': 'application/json' }
+            });
+            cache.put(SP_CACHE_KEY, resp);
+        });
+    }
 });
 
 // ── Push received ─────────────────────────────────────────────────────────────

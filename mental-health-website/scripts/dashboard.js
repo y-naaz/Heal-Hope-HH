@@ -134,6 +134,8 @@ function initializeDashboard() {
     loadUserData();
     setupCrisisChatButton();
     setupRefreshButton();
+    // Load safety plan state (card badge + wallet card)
+    setTimeout(_updateSafetyPlanCard, 1500);
 }
 
 function getSupportAvatarMarkup() {
@@ -1151,6 +1153,7 @@ async function saveMood() {
                 await loadUserMoodData();
                 
                 showNotification('Mood logged successfully!', 'success');
+                _checkMoodForSafetyNudge(moodScores[selectedMood.getAttribute('data-mood')] || 5);
 
                 // Reset form
                 selectedMood.classList.remove('selected');
@@ -4354,102 +4357,391 @@ function closeCrisisChat() {
     if (modal) modal.remove();
 }
 
-function createSafetyPlan() {
-    const planHtml = `
-        <div id="safetyPlan" class="modal show" style="display: flex;">
-            <div class="modal-content" style="max-width: 700px; max-height: 80vh; overflow-y: auto;">
-                <div class="modal-header">
-                    <h2>Personal Safety Plan</h2>
-                    <span class="close" onclick="closeSafetyPlan()">&times;</span>
-                </div>
-                <form id="safetyPlanForm" class="auth-form">
-                    <div class="safety-plan-section">
-                        <h3>1. Warning Signs</h3>
-                        <p>List thoughts, feelings, or behaviors that might indicate a crisis:</p>
-                        <textarea name="warningSignsPersonal" placeholder="Personal warning signs (e.g., feeling hopeless, withdrawing from others)..." rows="3"></textarea>
-                        <textarea name="warningSigns" placeholder="Warning signs others might notice (e.g., changes in sleep, mood swings)..." rows="3"></textarea>
-                    </div>
-                    
-                    <div class="safety-plan-section">
-                        <h3>2. Coping Strategies</h3>
-                        <p>Things you can do on your own to help yourself feel better:</p>
-                        <textarea name="copingStrategies" placeholder="List activities that help you cope (e.g., listening to music, going for a walk, deep breathing)..." rows="4"></textarea>
-                    </div>
-                    
-                    <div class="safety-plan-section">
-                        <h3>3. Social Support</h3>
-                        <p>People you can talk to for support:</p>
-                        <div class="form-row">
-                            <input type="text" name="supportPerson1" placeholder="Name">
-                            <input type="tel" name="supportPhone1" placeholder="Phone number">
-                        </div>
-                        <div class="form-row">
-                            <input type="text" name="supportPerson2" placeholder="Name">
-                            <input type="tel" name="supportPhone2" placeholder="Phone number">
-                        </div>
-                    </div>
-                    
-                    <div class="safety-plan-section">
-                        <h3>4. Professional Contacts</h3>
-                        <p>Healthcare providers and emergency contacts:</p>
-                        <div class="form-row">
-                            <input type="text" name="therapistName" placeholder="Therapist/Counselor Name">
-                            <input type="tel" name="therapistPhone" placeholder="Phone number">
-                        </div>
-                        <div class="form-row">
-                            <input type="text" name="doctorName" placeholder="Doctor Name">
-                            <input type="tel" name="doctorPhone" placeholder="Phone number">
-                        </div>
-                    </div>
-                    
-                    <div class="safety-plan-section">
-                        <h3>5. Safe Environment</h3>
-                        <p>Ways to make your environment safer:</p>
-                        <textarea name="environmentSafety" placeholder="List steps to make your space safer (e.g., remove harmful items, ask family to check on you)..." rows="3"></textarea>
-                    </div>
-                    
-                    <button type="submit" class="btn btn-primary btn-full">Save Safety Plan</button>
-                </form>
+// ── Safety Plan Wizard ────────────────────────────────────────────────────────
+
+const SP_STEPS = [
+    {
+        key: 'warning_signs_personal',
+        title: 'Warning Signs — Personal',
+        icon: '🔍',
+        subtitle: 'Step 1 of 6',
+        description: 'What thoughts, feelings, or body sensations tell <em>you</em> that a crisis may be building? The earlier you catch these, the easier it is to act.',
+        fields: [{ type: 'textarea', name: 'warning_signs_personal', placeholder: 'e.g. I start feeling numb, I stop replying to messages, I can\'t sleep...', rows: 4 }],
+        tip: 'Be specific — generic answers are harder to act on during a crisis.',
+    },
+    {
+        key: 'warning_signs_observable',
+        title: 'Warning Signs — What Others Notice',
+        icon: '👁️',
+        subtitle: 'Step 2 of 6',
+        description: 'What might a friend or family member notice about you when you\'re struggling? This helps your support network spot a crisis even when you can\'t.',
+        fields: [{ type: 'textarea', name: 'warning_signs_observable', placeholder: 'e.g. I stop eating, I cancel plans, I become very quiet or very irritable...', rows: 4 }],
+        tip: 'Ask someone who knows you well — they often see things we miss.',
+    },
+    {
+        key: 'coping_strategies',
+        title: 'Coping Strategies',
+        icon: '🧘',
+        subtitle: 'Step 3 of 6',
+        description: 'Things you can do <em>on your own</em> to feel better — no one else needed. List at least 3 that have worked for you before.',
+        fields: [{ type: 'textarea', name: 'coping_strategies', placeholder: 'e.g. Go for a 15-minute walk, put on a playlist, call a friend, write in my journal...', rows: 5 }],
+        tip: 'Order them from easiest to hardest — try the easiest one first.',
+    },
+    {
+        key: 'support_contacts',
+        title: 'Social Support',
+        icon: '🤝',
+        subtitle: 'Step 4 of 6',
+        description: 'People you trust who you can reach out to — not necessarily to talk about the crisis, just to not be alone.',
+        fields: 'contacts_support',
+        tip: 'Include people who make you feel safe, not just people you feel obligated to call.',
+    },
+    {
+        key: 'professional_contacts',
+        title: 'Professional Contacts',
+        icon: '🏥',
+        subtitle: 'Step 5 of 6',
+        description: 'Your therapist, doctor, or a crisis helpline. These contacts are for when personal support isn\'t enough.',
+        fields: 'contacts_professional',
+        tip: 'Save these numbers in your phone too — don\'t rely on this plan being open.',
+    },
+    {
+        key: 'environment_safety',
+        title: 'Safe Environment & Reasons for Living',
+        icon: '💚',
+        subtitle: 'Step 6 of 6',
+        description: 'Two final — and often the most powerful — sections of your plan.',
+        fields: [
+            { type: 'textarea', name: 'environment_safety', label: '🏠 Make my environment safer', placeholder: 'e.g. Ask someone to check on me, remove items that feel dangerous...', rows: 3 },
+            { type: 'textarea', name: 'reasons_for_living', label: '💛 My reasons for living', placeholder: 'e.g. My dog, finishing my degree, the people who love me, experiencing more sunrises...', rows: 3 },
+        ],
+        tip: 'Re-read your reasons for living regularly — not only in a crisis.',
+    },
+];
+
+let _spStep = 0;
+let _spData = {};
+let _spSaving = false;
+
+async function createSafetyPlan() {
+    if (document.getElementById('safetyPlanModal')) return;
+    // Load existing plan first
+    try {
+        const resp = await fetch(API_ENDPOINTS.safetyPlan.get, { headers: getAuthHeaders() });
+        if (resp.ok) {
+            const d = await resp.json();
+            if (d.success) _spData = d.plan || {};
+        }
+    } catch (_) {
+        const stored = localStorage.getItem('mindwell_safety_plan_v2');
+        if (stored) _spData = JSON.parse(stored);
+    }
+    _spStep = 0;
+    _renderSafetyPlanModal();
+}
+
+function _renderSafetyPlanModal() {
+    const existing = document.getElementById('safetyPlanModal');
+    if (existing) existing.remove();
+
+    const pct = _spCompletionPct();
+    const step = SP_STEPS[_spStep];
+    const isLast = _spStep === SP_STEPS.length - 1;
+    const lastUpdated = _spData.updated_at
+        ? `Last saved ${new Date(_spData.updated_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`
+        : 'Not saved yet';
+
+    const html = `
+    <div id="safetyPlanModal" style="position:fixed;inset:0;background:rgba(15,23,42,0.6);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px);">
+      <div style="background:#fff;border-radius:20px;width:100%;max-width:640px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,0.2);overflow:hidden;">
+
+        <!-- Header -->
+        <div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;background:linear-gradient(135deg,#6366f108,#8b5cf608);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div>
+              <h2 style="font-size:17px;font-weight:700;color:#0f172a;margin:0;">Personal Safety Plan</h2>
+              <span style="font-size:12px;color:#94a3b8;">${lastUpdated}</span>
             </div>
+            <button onclick="closeSafetyPlan()" style="width:32px;height:32px;border-radius:50%;border:1px solid #e2e8f0;background:#fff;cursor:pointer;font-size:18px;color:#64748b;display:flex;align-items:center;justify-content:center;">&times;</button>
+          </div>
+          <!-- Progress bar -->
+          <div style="background:#f1f5f9;border-radius:99px;height:6px;overflow:hidden;">
+            <div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);border-radius:99px;transition:width 0.4s ease;"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:6px;">
+            <span style="font-size:11px;color:#64748b;">${step.subtitle}</span>
+            <span style="font-size:11px;color:#6366f1;font-weight:600;">${pct}% complete</span>
+          </div>
+          <!-- Step dots -->
+          <div style="display:flex;gap:6px;margin-top:10px;justify-content:center;">
+            ${SP_STEPS.map((s, i) => `
+              <div onclick="_spGoTo(${i})" style="width:${i === _spStep ? '24px' : '8px'};height:8px;border-radius:99px;background:${i === _spStep ? '#6366f1' : (i < _spStep ? '#a5b4fc' : '#e2e8f0')};cursor:pointer;transition:all 0.2s;"></div>
+            `).join('')}
+          </div>
         </div>
-    `;
-    
-    document.body.insertAdjacentHTML('beforeend', planHtml);
-    
-    document.getElementById('safetyPlanForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        saveSafetyPlan(this);
+
+        <!-- Step body -->
+        <div style="padding:24px;overflow-y:auto;flex:1;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+            <span style="font-size:24px;">${step.icon}</span>
+            <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin:0;">${step.title}</h3>
+          </div>
+          <p style="font-size:13.5px;color:#475569;margin:0 0 18px;line-height:1.6;">${step.description}</p>
+
+          ${_spRenderFields(step)}
+
+          <!-- AI Suggestions -->
+          <div id="sp-suggestions-area" style="margin-top:16px;"></div>
+          <button onclick="_spGetSuggestions('${step.key}')"
+            style="display:inline-flex;align-items:center;gap:7px;margin-top:12px;padding:8px 14px;border-radius:10px;border:1px solid #6366f130;background:#6366f108;color:#6366f1;font-size:13px;font-weight:600;cursor:pointer;">
+            <i class="fas fa-magic"></i> Get AI suggestions for this section
+          </button>
+
+          <!-- Tip -->
+          <div style="margin-top:18px;padding:10px 14px;background:#fffbeb;border-radius:10px;border-left:3px solid #f59e0b;font-size:12.5px;color:#78350f;">
+            <strong>Tip:</strong> ${step.tip}
+          </div>
+        </div>
+
+        <!-- Footer nav -->
+        <div style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;gap:10px;align-items:center;">
+          ${_spStep > 0 ? `<button onclick="_spNav(-1)" style="padding:10px 18px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#475569;font-size:14px;font-weight:500;cursor:pointer;">← Back</button>` : ''}
+          <div style="flex:1;"></div>
+          <button onclick="_spSaveProgress()" style="padding:10px 18px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#6366f1;font-size:14px;font-weight:500;cursor:pointer;">Save draft</button>
+          ${isLast
+            ? `<button onclick="_spFinalSave()" style="padding:10px 20px;border-radius:10px;border:none;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;"><i class="fas fa-check"></i> Save & Finish</button>
+               <button onclick="_spPrint()" style="padding:10px 14px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#64748b;font-size:14px;cursor:pointer;" title="Download PDF"><i class="fas fa-download"></i></button>`
+            : `<button onclick="_spNav(1)" style="padding:10px 20px;border-radius:10px;border:none;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:14px;font-weight:600;cursor:pointer;">Next →</button>`
+          }
+        </div>
+      </div>
+    </div>`;
+
+    document.body.insertAdjacentHTML('beforeend', html);
+    _spRestoreFields(step);
+}
+
+function _spCompletionPct() {
+    const keys = ['warning_signs_personal', 'warning_signs_observable', 'coping_strategies',
+                  'support_contacts', 'professional_contacts', 'environment_safety', 'reasons_for_living'];
+    const filled = keys.filter(k => {
+        const v = _spData[k];
+        return Array.isArray(v) ? v.length > 0 : (v && String(v).trim().length > 0);
+    }).length;
+    return Math.round(filled / keys.length * 100);
+}
+
+function _spRenderFields(step) {
+    if (step.fields === 'contacts_support') return _spContactFields('support', 3);
+    if (step.fields === 'contacts_professional') return _spContactFields('professional', 3);
+    return step.fields.map(f => `
+        <div style="margin-bottom:14px;">
+            ${f.label ? `<label style="display:block;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">${f.label}</label>` : ''}
+            <textarea id="sp-${f.name}" name="${f.name}" rows="${f.rows}"
+                placeholder="${f.placeholder}"
+                oninput="_spAutoSave()"
+                style="width:100%;padding:12px;border:1px solid #e2e8f0;border-radius:10px;font-size:14px;color:#0f172a;resize:vertical;font-family:inherit;line-height:1.5;box-sizing:border-box;transition:border-color 0.15s;"
+                onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#e2e8f0'"></textarea>
+        </div>`).join('');
+}
+
+function _spContactFields(type, count) {
+    const contacts = _spData[`${type}_contacts`] || [];
+    let html = '';
+    for (let i = 0; i < count; i++) {
+        const c = contacts[i] || {};
+        const roleField = type === 'professional'
+            ? `<input id="sp-${type}-role-${i}" placeholder="Role (e.g. Therapist)" value="${escapeHtml(c.role||'')}" oninput="_spAutoSave()" style="${_spInputStyle()}">`
+            : `<input id="sp-${type}-rel-${i}" placeholder="Relationship (e.g. Friend)" value="${escapeHtml(c.relationship||'')}" oninput="_spAutoSave()" style="${_spInputStyle()}">`;
+        html += `
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;">
+            <input id="sp-${type}-name-${i}" placeholder="Name" value="${escapeHtml(c.name||'')}" oninput="_spAutoSave()" style="${_spInputStyle()}">
+            <input id="sp-${type}-phone-${i}" placeholder="Phone" type="tel" value="${escapeHtml(c.phone||'')}" oninput="_spAutoSave()" style="${_spInputStyle()}">
+            ${roleField}
+        </div>`;
+    }
+    return html;
+}
+
+function _spInputStyle() {
+    return 'padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13.5px;font-family:inherit;width:100%;box-sizing:border-box;';
+}
+
+function _spRestoreFields(step) {
+    if (step.fields === 'contacts_support' || step.fields === 'contacts_professional') return;
+    step.fields.forEach(f => {
+        const el = document.getElementById(`sp-${f.name}`);
+        if (el && _spData[f.name]) el.value = _spData[f.name];
     });
 }
 
+function _spCollectCurrentStep() {
+    const step = SP_STEPS[_spStep];
+    if (step.fields === 'contacts_support' || step.fields === 'contacts_professional') {
+        const type = step.fields === 'contacts_support' ? 'support' : 'professional';
+        const contacts = [];
+        for (let i = 0; i < 3; i++) {
+            const name  = (document.getElementById(`sp-${type}-name-${i}`)?.value || '').trim();
+            const phone = (document.getElementById(`sp-${type}-phone-${i}`)?.value || '').trim();
+            const role  = (document.getElementById(`sp-${type}-role-${i}`)?.value || '').trim();
+            const rel   = (document.getElementById(`sp-${type}-rel-${i}`)?.value || '').trim();
+            if (name || phone) contacts.push({ name, phone, role, relationship: rel });
+        }
+        _spData[`${type}_contacts`] = contacts;
+    } else {
+        step.fields.forEach(f => {
+            const el = document.getElementById(`sp-${f.name}`);
+            if (el) _spData[f.name] = el.value;
+        });
+    }
+}
+
+let _spAutoSaveTimer = null;
+function _spAutoSave() {
+    clearTimeout(_spAutoSaveTimer);
+    _spAutoSaveTimer = setTimeout(() => {
+        _spCollectCurrentStep();
+        localStorage.setItem('mindwell_safety_plan_v2', JSON.stringify(_spData));
+    }, 800);
+}
+
+function _spNav(dir) {
+    _spCollectCurrentStep();
+    localStorage.setItem('mindwell_safety_plan_v2', JSON.stringify(_spData));
+    _spStep = Math.max(0, Math.min(SP_STEPS.length - 1, _spStep + dir));
+    _renderSafetyPlanModal();
+}
+
+function _spGoTo(idx) {
+    _spCollectCurrentStep();
+    localStorage.setItem('mindwell_safety_plan_v2', JSON.stringify(_spData));
+    _spStep = idx;
+    _renderSafetyPlanModal();
+}
+
+async function _spSaveProgress() {
+    _spCollectCurrentStep();
+    localStorage.setItem('mindwell_safety_plan_v2', JSON.stringify(_spData));
+    try {
+        const resp = await fetch(API_ENDPOINTS.safetyPlan.save, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(_spData),
+        });
+        if (resp.ok) {
+            const d = await resp.json();
+            if (d.success) _spData = { ..._spData, ...d.plan };
+        }
+    } catch (_) {}
+    showNotification('Draft saved', 'success');
+}
+
+async function _spFinalSave() {
+    _spCollectCurrentStep();
+    _spData.mark_reviewed = true;
+    try {
+        const resp = await fetch(API_ENDPOINTS.safetyPlan.save, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(_spData),
+        });
+        if (resp.ok) {
+            const d = await resp.json();
+            if (d.success) _spData = { ..._spData, ...d.plan };
+        }
+    } catch (_) {}
+    localStorage.setItem('mindwell_safety_plan_v2', JSON.stringify(_spData));
+    // Cache in service worker for offline access
+    if (navigator.serviceWorker?.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'CACHE_SAFETY_PLAN', plan: _spData });
+    }
+    showNotification('Safety plan saved! ✓', 'success');
+    closeSafetyPlan();
+    _updateSafetyPlanCard();
+}
+
+async function _spGetSuggestions(section) {
+    const area = document.getElementById('sp-suggestions-area');
+    if (!area) return;
+    area.innerHTML = `<div style="padding:12px;color:#6366f1;font-size:13px;"><i class="fas fa-spinner fa-spin"></i> Getting suggestions…</div>`;
+    try {
+        const resp = await fetch(API_ENDPOINTS.safetyPlan.suggestions(section), { headers: getAuthHeaders() });
+        const data = await resp.json();
+        if (data.success && data.suggestions.length) {
+            area.innerHTML = `
+            <div style="background:#f8faff;border:1px solid #e0e7ff;border-radius:12px;padding:14px;">
+                <p style="font-size:12px;font-weight:600;color:#6366f1;margin:0 0 10px;">AI suggestions — click to add:</p>
+                <div style="display:flex;flex-direction:column;gap:7px;">
+                    ${data.suggestions.map(s => `
+                        <button onclick="_spInsertSuggestion('${section}', \`${s.replace(/`/g, "'")}\`)"
+                            style="text-align:left;padding:8px 12px;border-radius:8px;border:1px solid #e0e7ff;background:#fff;color:#374151;font-size:13px;cursor:pointer;line-height:1.4;transition:background 0.15s;"
+                            onmouseover="this.style.background='#eef2ff'" onmouseout="this.style.background='#fff'">
+                            + ${escapeHtml(s)}
+                        </button>`).join('')}
+                </div>
+            </div>`;
+        } else {
+            area.innerHTML = `<p style="font-size:13px;color:#94a3b8;">Couldn't load suggestions right now.</p>`;
+        }
+    } catch (_) {
+        area.innerHTML = `<p style="font-size:13px;color:#94a3b8;">AI suggestions unavailable offline.</p>`;
+    }
+}
+
+function _spInsertSuggestion(section, text) {
+    const step = SP_STEPS[_spStep];
+    if (step.fields === 'contacts_support' || step.fields === 'contacts_professional') return;
+    const targetField = step.fields.find(f => f.name === section) || step.fields[0];
+    const el = document.getElementById(`sp-${targetField.name}`);
+    if (el) {
+        el.value = el.value ? el.value + '\n• ' + text : '• ' + text;
+        _spAutoSave();
+    }
+}
+
 function closeSafetyPlan() {
-    const modal = document.getElementById('safetyPlan');
+    const modal = document.getElementById('safetyPlanModal');
     if (modal) modal.remove();
 }
 
-function saveSafetyPlan(form) {
-    const formData = new FormData(form);
-    const safetyPlan = {
-        id: Date.now(),
-        warningSignsPersonal: formData.get('warningSignsPersonal'),
-        warningSigns: formData.get('warningSigns'),
-        copingStrategies: formData.get('copingStrategies'),
-        supportPerson1: formData.get('supportPerson1'),
-        supportPhone1: formData.get('supportPhone1'),
-        supportPerson2: formData.get('supportPerson2'),
-        supportPhone2: formData.get('supportPhone2'),
-        therapistName: formData.get('therapistName'),
-        therapistPhone: formData.get('therapistPhone'),
-        doctorName: formData.get('doctorName'),
-        doctorPhone: formData.get('doctorPhone'),
-        environmentSafety: formData.get('environmentSafety'),
-        createdAt: new Date().toISOString(),
-        lastModified: new Date().toISOString()
-    };
-    
-    localStorage.setItem('mindwell_safety_plan', JSON.stringify(safetyPlan));
-    showNotification('Safety plan saved successfully!', 'success');
-    closeSafetyPlan();
+// Legacy alias kept for old onclick refs
+function saveSafetyPlan() { _spFinalSave(); }
+
+function _spPrint() {
+    _spCollectCurrentStep();
+    const plan = _spData;
+    const userName = document.querySelector('.profile-name')?.textContent || 'My';
+    const win = window.open('', '_blank');
+    const sc = (contacts) => (contacts || []).map(c =>
+        `<tr><td>${c.name||''}</td><td>${c.phone||''}</td><td>${c.role||c.relationship||''}</td></tr>`
+    ).join('');
+    win.document.write(`<!DOCTYPE html><html><head><title>${userName}'s Safety Plan</title>
+    <style>
+        body{font-family:Arial,sans-serif;max-width:750px;margin:40px auto;color:#0f172a;line-height:1.6;font-size:14px;}
+        h1{color:#6366f1;font-size:22px;border-bottom:2px solid #6366f1;padding-bottom:8px;}
+        h2{font-size:15px;color:#374151;margin-top:24px;margin-bottom:6px;}
+        p,pre{white-space:pre-wrap;background:#f8fafc;padding:10px 14px;border-radius:6px;border-left:3px solid #6366f1;margin:0;}
+        table{width:100%;border-collapse:collapse;margin:8px 0;}
+        td{padding:7px 10px;border:1px solid #e2e8f0;font-size:13px;}
+        tr:nth-child(even) td{background:#f8fafc;}
+        .footer{margin-top:32px;font-size:11px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:12px;}
+        @media print{body{margin:20px;}}
+    </style></head><body>
+    <h1>🛡️ ${userName}'s Personal Safety Plan</h1>
+    <p style="background:none;border:none;padding:0;color:#64748b;font-size:12px;">Created with MindWell · ${new Date().toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'})}</p>
+
+    <h2>🔍 Warning Signs — Personal</h2><p>${escapeHtml(plan.warning_signs_personal||'Not filled')}</p>
+    <h2>👁️ Warning Signs — Observable</h2><p>${escapeHtml(plan.warning_signs_observable||'Not filled')}</p>
+    <h2>🧘 Coping Strategies</h2><p>${escapeHtml(plan.coping_strategies||'Not filled')}</p>
+    <h2>🤝 Social Support Contacts</h2>
+    <table><tr style="background:#f1f5f9;"><td><b>Name</b></td><td><b>Phone</b></td><td><b>Relationship</b></td></tr>${sc(plan.support_contacts)}</table>
+    <h2>🏥 Professional Contacts</h2>
+    <table><tr style="background:#f1f5f9;"><td><b>Name</b></td><td><b>Phone</b></td><td><b>Role</b></td></tr>${sc(plan.professional_contacts)}</table>
+    <h2>🏠 Safe Environment Steps</h2><p>${escapeHtml(plan.environment_safety||'Not filled')}</p>
+    <h2>💛 Reasons for Living</h2><p>${escapeHtml(plan.reasons_for_living||'Not filled')}</p>
+
+    <div class="footer">MindWell Safety Plan · Keep a copy in your phone and share with your therapist.</div>
+    </body></html>`);
+    win.document.close();
+    win.print();
 }
 
 function viewCopingStrategies() {
@@ -4537,14 +4829,37 @@ function closeCopingStrategies() {
 }
 
 function contactSupports() {
+    // Pull professional contacts from saved safety plan
+    const stored = JSON.parse(localStorage.getItem('mindwell_safety_plan_v2') || '{}');
+    const profContacts = (stored.professional_contacts || []).filter(c => c.name || c.phone);
+    const suppContacts = (stored.support_contacts || []).filter(c => c.name || c.phone);
+
+    const myContactsHtml = (profContacts.length + suppContacts.length) > 0 ? `
+        <div class="contact-section">
+            <h3>👤 From Your Safety Plan</h3>
+            ${[...suppContacts, ...profContacts].map(c => `
+            <div class="contact-item">
+                <h4>${escapeHtml(c.name)}</h4>
+                ${c.phone ? `<a href="tel:${c.phone}" class="contact-number">${escapeHtml(c.phone)}</a>` : ''}
+                <p>${escapeHtml(c.role || c.relationship || '')}</p>
+            </div>`).join('')}
+        </div>` : `
+        <div class="contact-section" style="background:#fffbeb;border-radius:10px;padding:12px 14px;margin-bottom:4px;">
+            <p style="font-size:13px;color:#78350f;margin:0;">
+                <i class="fas fa-lightbulb"></i>
+                Add personal contacts to your <button onclick="createSafetyPlan();closeEmergencyContacts();" style="background:none;border:none;color:#6366f1;font-weight:600;cursor:pointer;font-size:13px;padding:0;">Safety Plan</button> — they'll appear here.
+            </p>
+        </div>`;
+
     const contactsHtml = `
-        <div id="emergencyContacts" class="modal show" style="display: flex;">
-            <div class="modal-content" style="max-width: 500px;">
+        <div id="emergencyContacts" class="modal show" style="display:flex;">
+            <div class="modal-content" style="max-width:500px;max-height:85vh;overflow-y:auto;">
                 <div class="modal-header">
                     <h2>Emergency Contacts</h2>
                     <span class="close" onclick="closeEmergencyContacts()">&times;</span>
                 </div>
                 <div class="contacts-content">
+                    ${myContactsHtml}
                     <div class="contact-section">
                         <h3>🚨 Crisis Helplines — India</h3>
                         <div class="contact-item">
@@ -4563,45 +4878,237 @@ function contactSupports() {
                             <p>Suicide prevention · 24/7</p>
                         </div>
                         <div class="contact-item">
+                            <h4>Snehi India</h4>
+                            <a href="tel:04424640050" class="contact-number">044-24640050</a>
+                            <p>Emotional support · Mon–Sat</p>
+                        </div>
+                        <div class="contact-item">
                             <h4>Emergency Services</h4>
                             <a href="tel:112" class="contact-number">112</a>
                             <p>All emergencies · 24/7</p>
                         </div>
                     </div>
-                    
                     <div class="contact-section">
-                        <h3>🏥 Local Emergency Services</h3>
-                        <div class="contact-item">
-                            <h4>Emergency Services</h4>
-                            <a href="tel:911" class="contact-number">911</a>
-                            <p>For immediate life-threatening emergencies</p>
-                        </div>
-                        <div class="contact-item">
-                            <h4>Local Crisis Center</h4>
-                            <span class="contact-number">Call 211 for local resources</span>
-                            <p>Find crisis centers near you</p>
-                        </div>
-                    </div>
-                    
-                    <div class="contact-section">
-                        <h3>📱 Online Resources</h3>
+                        <h3>💬 Online Support</h3>
                         <div class="contact-item">
                             <h4>Crisis Chat</h4>
-                            <button onclick="startCrisisChat(); closeEmergencyContacts();" class="btn btn-primary btn-sm">Start Chat</button>
-                            <p>Anonymous crisis support chat</p>
+                            <button onclick="startCrisisChat();closeEmergencyContacts();" class="btn btn-primary btn-sm">Start Chat</button>
+                            <p>Anonymous AI-assisted crisis support</p>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
-    `;
-    
+        </div>`;
+
     document.body.insertAdjacentHTML('beforeend', contactsHtml);
 }
 
 function closeEmergencyContacts() {
     const modal = document.getElementById('emergencyContacts');
     if (modal) modal.remove();
+}
+
+// ── Safety Plan Card Updater ──────────────────────────────────────────────────
+
+async function _updateSafetyPlanCard() {
+    let plan = null;
+    try {
+        const resp = await fetch(API_ENDPOINTS.safetyPlan.get, { headers: getAuthHeaders() });
+        if (resp.ok) { const d = await resp.json(); if (d.success) plan = d.plan; }
+    } catch (_) {
+        const stored = localStorage.getItem('mindwell_safety_plan_v2');
+        if (stored) plan = JSON.parse(stored);
+    }
+    if (!plan) return;
+
+    const pct = plan.completion_pct ?? _spCompletionPct.call({ _spData: plan });
+    const statusEl  = document.getElementById('safetyPlanStatus');
+    const barEl     = document.getElementById('safetyPlanBar');
+    const pctEl     = document.getElementById('safetyPlanPct');
+    const btnEl     = document.getElementById('safetyPlanBtn');
+
+    if (statusEl && pct > 0) {
+        statusEl.style.display = 'block';
+        if (barEl)  barEl.style.width  = pct + '%';
+        if (pctEl)  pctEl.textContent  = pct + '%';
+    }
+    if (btnEl && pct > 0) {
+        btnEl.innerHTML = '<i class="fas fa-edit"></i> View / Edit Safety Plan';
+    }
+
+    // Cache for SOS mode + wallet card
+    localStorage.setItem('mindwell_safety_plan_v2', JSON.stringify(plan));
+    _renderWalletCard(plan);
+}
+
+// ── Mini Wallet Card ──────────────────────────────────────────────────────────
+
+function _renderWalletCard(plan) {
+    const container = document.getElementById('walletCardContainer');
+    if (!container) return;
+
+    const coping = (plan.coping_strategies || '').split('\n').filter(Boolean).slice(0, 3);
+    const contacts = [...(plan.support_contacts || []), ...(plan.professional_contacts || [])]
+        .filter(c => c.name).slice(0, 2);
+    const reasons = (plan.reasons_for_living || '').split('\n').filter(Boolean).slice(0, 2);
+
+    if (!coping.length && !contacts.length && !reasons.length) {
+        container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = 'block';
+    container.innerHTML = `
+    <div style="background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:16px;padding:16px 18px;color:#fff;position:relative;overflow:hidden;">
+        <div style="position:absolute;top:-20px;right:-20px;width:80px;height:80px;background:rgba(255,255,255,0.08);border-radius:50%;"></div>
+        <div style="position:absolute;bottom:-30px;left:40px;width:100px;height:100px;background:rgba(255,255,255,0.06);border-radius:50%;"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;position:relative;">
+            <div style="display:flex;align-items:center;gap:8px;">
+                <i class="fas fa-shield-alt" style="font-size:15px;opacity:0.9;"></i>
+                <span style="font-size:13px;font-weight:700;letter-spacing:0.02em;">My Safety Card</span>
+            </div>
+            <button onclick="createSafetyPlan()" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;padding:4px 10px;color:#fff;font-size:11px;font-weight:600;cursor:pointer;">Edit</button>
+        </div>
+        ${coping.length ? `
+        <div style="margin-bottom:10px;position:relative;">
+            <p style="font-size:10px;font-weight:700;opacity:0.7;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 5px;">When I'm struggling</p>
+            ${coping.map(c => `<p style="font-size:12.5px;margin:0 0 3px;opacity:0.95;">• ${escapeHtml(c.replace(/^[•\-\d\.]+\s*/,''))}</p>`).join('')}
+        </div>` : ''}
+        ${contacts.length ? `
+        <div style="margin-bottom:10px;position:relative;">
+            <p style="font-size:10px;font-weight:700;opacity:0.7;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 5px;">I can call</p>
+            ${contacts.map(c => `
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+                <span style="font-size:12.5px;opacity:0.95;">${escapeHtml(c.name)}</span>
+                ${c.phone ? `<a href="tel:${c.phone}" style="color:#fff;font-size:12px;font-weight:600;text-decoration:none;background:rgba(255,255,255,0.15);padding:2px 8px;border-radius:6px;">${escapeHtml(c.phone)}</a>` : ''}
+            </div>`).join('')}
+        </div>` : ''}
+        ${reasons.length ? `
+        <div style="position:relative;">
+            <p style="font-size:10px;font-weight:700;opacity:0.7;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 5px;">I'm doing this for</p>
+            ${reasons.map(r => `<p style="font-size:12.5px;margin:0 0 2px;opacity:0.95;">💛 ${escapeHtml(r.replace(/^[•\-\d\.]+\s*/,''))}</p>`).join('')}
+        </div>` : ''}
+    </div>`;
+}
+
+// ── SOS Crisis Mode ───────────────────────────────────────────────────────────
+
+function openSosMode() {
+    const overlay = document.getElementById('sosOverlay');
+    if (!overlay) return;
+
+    const plan = JSON.parse(localStorage.getItem('mindwell_safety_plan_v2') || '{}');
+    const coping   = (plan.coping_strategies || '').split('\n').filter(Boolean);
+    const contacts = [...(plan.support_contacts || []), ...(plan.professional_contacts || [])].filter(c => c.name);
+    const reasons  = (plan.reasons_for_living || '').split('\n').filter(Boolean);
+    const hasPlan  = coping.length || contacts.length || reasons.length;
+
+    overlay.style.cssText = 'display:flex;position:fixed;inset:0;z-index:20000;background:rgba(15,23,42,0.97);align-items:center;justify-content:center;flex-direction:column;padding:24px;overflow-y:auto;';
+
+    overlay.innerHTML = `
+    <div style="max-width:520px;width:100%;text-align:center;">
+        <div style="font-size:48px;margin-bottom:12px;">🛡️</div>
+        <h2 style="color:#fff;font-size:22px;font-weight:700;margin:0 0 8px;">You are not alone</h2>
+        <p style="color:#94a3b8;font-size:15px;margin:0 0 28px;line-height:1.6;">Take a breath. You've got through hard moments before.<br>Let's go through your plan together.</p>
+
+        <!-- Immediate action -->
+        <div style="background:#dc2626;border-radius:14px;padding:16px;margin-bottom:16px;">
+            <p style="color:#fff;font-size:13px;font-weight:600;margin:0 0 10px;">If you're in immediate danger</p>
+            <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+                <a href="tel:112" style="background:#fff;color:#dc2626;padding:10px 20px;border-radius:10px;font-weight:700;font-size:15px;text-decoration:none;">📞 Call 112</a>
+                <a href="tel:9152987821" style="background:rgba(255,255,255,0.15);color:#fff;padding:10px 20px;border-radius:10px;font-weight:600;font-size:14px;text-decoration:none;">iCall 9152987821</a>
+            </div>
+        </div>
+
+        ${hasPlan ? `
+        <!-- Coping strategies -->
+        ${coping.length ? `
+        <div style="background:#1e293b;border-radius:14px;padding:18px;margin-bottom:12px;text-align:left;">
+            <p style="color:#94a3b8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 10px;">Try one of these right now</p>
+            ${coping.slice(0,4).map(c => `
+            <div style="background:#0f172a;border-radius:10px;padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px;">
+                <span style="font-size:18px;">🧘</span>
+                <span style="color:#e2e8f0;font-size:14px;line-height:1.4;">${escapeHtml(c.replace(/^[•\-\d\.]+\s*/,''))}</span>
+            </div>`).join('')}
+        </div>` : ''}
+
+        <!-- Contacts -->
+        ${contacts.length ? `
+        <div style="background:#1e293b;border-radius:14px;padding:18px;margin-bottom:12px;text-align:left;">
+            <p style="color:#94a3b8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 10px;">Reach out to someone</p>
+            ${contacts.slice(0,3).map(c => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #0f172a;">
+                <div>
+                    <p style="color:#e2e8f0;font-size:14px;font-weight:600;margin:0;">${escapeHtml(c.name)}</p>
+                    <p style="color:#64748b;font-size:12px;margin:0;">${escapeHtml(c.role||c.relationship||'')}</p>
+                </div>
+                ${c.phone ? `<a href="tel:${c.phone}" style="background:#6366f1;color:#fff;padding:8px 14px;border-radius:8px;font-weight:600;font-size:13px;text-decoration:none;">Call</a>` : ''}
+            </div>`).join('')}
+        </div>` : ''}
+
+        <!-- Reasons for living -->
+        ${reasons.length ? `
+        <div style="background:#1e293b;border-radius:14px;padding:18px;margin-bottom:12px;text-align:left;">
+            <p style="color:#94a3b8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin:0 0 10px;">Remember why you're here</p>
+            ${reasons.slice(0,4).map(r => `
+            <p style="color:#e2e8f0;font-size:14px;margin:0 0 7px;line-height:1.5;">💛 ${escapeHtml(r.replace(/^[•\-\d\.]+\s*/,''))}</p>`).join('')}
+        </div>` : ''}
+        ` : `
+        <div style="background:#1e293b;border-radius:14px;padding:20px;margin-bottom:16px;">
+            <p style="color:#e2e8f0;font-size:14px;line-height:1.6;margin:0 0 14px;">You haven't set up a safety plan yet. Creating one now takes just a few minutes and gives you a personalised guide for moments like this.</p>
+            <button onclick="closeSosMode();createSafetyPlan();" style="background:#6366f1;color:#fff;border:none;border-radius:10px;padding:12px 20px;font-size:14px;font-weight:600;cursor:pointer;width:100%;">Create my safety plan →</button>
+        </div>`}
+
+        <!-- Chat support -->
+        <button onclick="closeSosMode();startCrisisChat();" style="width:100%;background:#1e293b;border:1px solid #334155;border-radius:12px;padding:13px;color:#e2e8f0;font-size:14px;font-weight:500;cursor:pointer;margin-bottom:12px;">
+            💬 Talk to AI support chat
+        </button>
+
+        <button onclick="closeSosMode()" style="background:transparent;border:1px solid #334155;border-radius:12px;padding:11px 20px;color:#64748b;font-size:14px;cursor:pointer;width:100%;">
+            I'm feeling a little better — close
+        </button>
+    </div>`;
+}
+
+function closeSosMode() {
+    const overlay = document.getElementById('sosOverlay');
+    if (overlay) overlay.style.display = 'none';
+}
+
+// ── Mood-triggered nudge ──────────────────────────────────────────────────────
+
+function _checkMoodForSafetyNudge(moodScore) {
+    if (moodScore > 2) return;
+    const nudge = document.getElementById('safetyPlanNudge');
+    if (!nudge) return;
+    // Don't show if dismissed in last 4 hours
+    const lastShown = parseInt(localStorage.getItem('sp_nudge_ts') || '0');
+    if (Date.now() - lastShown < 4 * 3600 * 1000) return;
+    localStorage.setItem('sp_nudge_ts', Date.now());
+    nudge.style.display = 'block';
+    setTimeout(() => { nudge.style.display = 'none'; }, 20000);
+}
+
+// ── Coping Effectiveness Tracker ─────────────────────────────────────────────
+
+function trackCopingStrategy(strategy, rating) {
+    const stored = JSON.parse(localStorage.getItem('mindwell_safety_plan_v2') || '{}');
+    const effectiveness = stored.coping_effectiveness || [];
+    const existing = effectiveness.find(e => e.strategy === strategy);
+    if (existing) {
+        existing.tried_count = (existing.tried_count || 0) + 1;
+        existing.avg_rating  = ((existing.avg_rating || rating) + rating) / 2;
+    } else {
+        effectiveness.push({ strategy, tried_count: 1, avg_rating: rating });
+    }
+    stored.coping_effectiveness = effectiveness;
+    localStorage.setItem('mindwell_safety_plan_v2', JSON.stringify(stored));
+    // Sync to backend silently
+    fetch(API_ENDPOINTS.safetyPlan.save, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ coping_effectiveness: effectiveness }),
+    }).catch(() => {});
 }
 
 // Enhanced Data Initialization with Backend Integration
